@@ -1,0 +1,26 @@
+{
+  "name": "GrapplingConnect",
+  "path": "/home/salexanderb/kai/projects/grapplingconnect",
+  "appPath": "/home/salexanderb/kai/projects/grapplingconnect/app",
+  "description": "BJJ gym management and scheduling platform",
+  "stack": "Next.js + Drizzle + PostgreSQL + Vitest + Playwright",
+  "commands": {
+    "dev": "cd app && bun dev",
+    "build": "cd app && bun run build",
+    "test": "cd app && bun test",
+    "test:integration": "cd app && bun run test:integration",
+    "e2e": "cd app && bun run e2e",
+    "lint": "cd app && bun run lint:fix",
+    "db:studio": "cd app && bun run db:studio",
+    "db:migrate": "cd app && bun run db:migrate",
+    "db:seed": "cd app && bun run db:seed",
+    "docker:up": "cd app && docker compose up -d",
+    "docker:down": "cd app && docker compose down"
+  },
+  "notes": [
+    "App code lives in app/ subdirectory",
+    "Database is PostgreSQL via Docker",
+    "Uses Drizzle ORM for database operations",
+    "Vitest for unit tests, Playwright for e2e"
+  ]
+}
