@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 export default defineConfig({
 	test: {
 		root: '.',
-		include: ['tests/**/*.{test,spec}.{js,ts,jsx,tsx}'],
+		include: ['tests/**/*.{test,spec}.{js,ts,jsx,tsx}', 'src/**/__tests__/*.{test,spec}.{js,ts,jsx,tsx}'],
 		exclude: ['node_modules', 'dist'],
 	},
 	resolve: {
