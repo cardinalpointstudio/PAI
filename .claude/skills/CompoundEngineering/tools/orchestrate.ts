@@ -1,81 +1,54 @@
 #!/usr/bin/env bun
 
 /**
- * Orchestrate - Parallel Claude Code workflow coordinator
- *
- * Manages the Plan → Implement → Review → Refine → Compound cycle
- * with multiple parallel workers across tmux windows.
+ * Compound Engineering Orchestrator
+ * Interactive command center for managing parallel Claude Code workflows
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, watch } from "fs";
-import { join, resolve } from "path";
-import { spawn, execSync } from "child_process";
+import { existsSync, readdirSync, readFileSync, writeFileSync, watch, mkdirSync, rmSync, unlinkSync, renameSync } from "fs";
+import { execSync } from "child_process";
+import { join } from "path";
+import * as readline from "readline";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type WorkflowState =
-  | "init"
-  | "planning"
-  | "implementing"
-  | "reviewing"
-  | "refining"
-  | "compounding"
-  | "complete"
-  | "failed";
+type Phase = "init" | "planning" | "implementing" | "reviewing" | "refining" | "compounding" | "complete";
 
-interface WorkflowConfig {
-  maxIterations: number;
-  workers: string[];
-  projectRoot: string;
-  contractsDir: string;
-  tasksDir: string;
-  reviewChecks: {
-    runTests: boolean;
-    validateContracts: boolean;
-    securityReview: boolean;
-    performanceReview: boolean;
-  };
-  tmuxSession: string;
-}
-
-interface WorkflowStatus {
-  state: WorkflowState;
+interface WorkflowState {
+  phase: Phase;
   iteration: number;
-  startedAt: string;
-  lastUpdated: string;
   signals: Record<string, boolean>;
-  errors: string[];
+  featureName?: string;
+  branchName?: string;
+  commitCount?: number;
 }
 
 // ============================================================================
 // Constants
 // ============================================================================
 
+const SESSION_NAME = "ce-dev";
 const WORKFLOW_DIR = ".workflow";
 const SIGNALS_DIR = "signals";
-const STATE_FILE = "state.json";
-const CONFIG_FILE = "config.json";
+const SCRIPT_DIR = import.meta.dir;
 
-const DEFAULT_CONFIG: WorkflowConfig = {
-  maxIterations: 3,
-  workers: ["backend", "frontend", "tests"],
-  projectRoot: ".",
-  contractsDir: ".workflow/contracts",
-  tasksDir: ".workflow/tasks",
-  reviewChecks: {
-    runTests: true,
-    validateContracts: true,
-    securityReview: true,
-    performanceReview: true,
-  },
-  tmuxSession: "compound-eng",
+// Window numbers (1-indexed for tmux)
+const WINDOWS = {
+  orchestrator: 1,
+  plan: 2,
+  backend: 3,
+  frontend: 4,
+  tests: 5,
+  review: 6,
+  status: 7,
 };
 
-const COLORS = {
+// ANSI colors
+const C = {
   reset: "\x1b[0m",
-  bright: "\x1b[1m",
+  bold: "\x1b[1m",
   dim: "\x1b[2m",
   red: "\x1b[31m",
   green: "\x1b[32m",
@@ -83,105 +56,37 @@ const COLORS = {
   blue: "\x1b[34m",
   magenta: "\x1b[35m",
   cyan: "\x1b[36m",
+  white: "\x1b[37m",
+  bgBlue: "\x1b[44m",
+  bgMagenta: "\x1b[45m",
 };
 
 // ============================================================================
 // Utility Functions
 // ============================================================================
 
-function log(msg: string, color: keyof typeof COLORS = "reset"): void {
-  const timestamp = new Date().toISOString().split("T")[1].split(".")[0];
-  console.log(`${COLORS.dim}[${timestamp}]${COLORS.reset} ${COLORS[color]}${msg}${COLORS.reset}`);
+function clearScreen(): void {
+  process.stdout.write("\x1b[2J\x1b[H");
 }
 
-function logError(msg: string): void {
-  log(`ERROR: ${msg}`, "red");
+function moveCursor(row: number, col: number): void {
+  process.stdout.write(`\x1b[${row};${col}H`);
 }
 
-function logSuccess(msg: string): void {
-  log(`✓ ${msg}`, "green");
+function hideCursor(): void {
+  process.stdout.write("\x1b[?25l");
 }
 
-function logInfo(msg: string): void {
-  log(`→ ${msg}`, "cyan");
-}
-
-function logState(state: WorkflowState): void {
-  const stateColors: Record<WorkflowState, keyof typeof COLORS> = {
-    init: "dim",
-    planning: "yellow",
-    implementing: "blue",
-    reviewing: "magenta",
-    refining: "yellow",
-    compounding: "cyan",
-    complete: "green",
-    failed: "red",
-  };
-  log(`State: ${state.toUpperCase()}`, stateColors[state]);
+function showCursor(): void {
+  process.stdout.write("\x1b[?25h");
 }
 
 function workflowPath(...parts: string[]): string {
   return join(process.cwd(), WORKFLOW_DIR, ...parts);
 }
 
-function ensureDir(path: string): void {
-  if (!existsSync(path)) {
-    mkdirSync(path, { recursive: true });
-  }
-}
-
 function fileExists(path: string): boolean {
   return existsSync(path);
-}
-
-function readJson<T>(path: string, defaultValue: T): T {
-  try {
-    if (fileExists(path)) {
-      return JSON.parse(readFileSync(path, "utf-8"));
-    }
-  } catch (e) {
-    logError(`Failed to read ${path}: ${e}`);
-  }
-  return defaultValue;
-}
-
-function writeJson(path: string, data: unknown): void {
-  writeFileSync(path, JSON.stringify(data, null, 2));
-}
-
-// ============================================================================
-// Workflow State Management
-// ============================================================================
-
-function getConfig(): WorkflowConfig {
-  return readJson(workflowPath(CONFIG_FILE), DEFAULT_CONFIG);
-}
-
-function getStatus(): WorkflowStatus {
-  const defaultStatus: WorkflowStatus = {
-    state: "init",
-    iteration: 0,
-    startedAt: new Date().toISOString(),
-    lastUpdated: new Date().toISOString(),
-    signals: {},
-    errors: [],
-  };
-  return readJson(workflowPath(STATE_FILE), defaultStatus);
-}
-
-function updateStatus(updates: Partial<WorkflowStatus>): void {
-  const current = getStatus();
-  const updated = {
-    ...current,
-    ...updates,
-    lastUpdated: new Date().toISOString(),
-  };
-  writeJson(workflowPath(STATE_FILE), updated);
-}
-
-function setState(state: WorkflowState): void {
-  updateStatus({ state });
-  logState(state);
 }
 
 function getSignals(): Record<string, boolean> {
@@ -189,530 +94,413 @@ function getSignals(): Record<string, boolean> {
   if (!fileExists(signalsDir)) return {};
 
   const signals: Record<string, boolean> = {};
-  const files = readdirSync(signalsDir);
-  for (const file of files) {
-    if (file.endsWith(".done")) {
-      const name = file.replace(".done", "");
-      signals[name] = true;
+  try {
+    const files = readdirSync(signalsDir);
+    for (const file of files) {
+      if (file.endsWith(".done")) {
+        const name = file.replace(".done", "");
+        signals[name] = true;
+      }
     }
+  } catch {
+    // Directory might not exist yet
   }
   return signals;
 }
 
-function signalComplete(name: string): void {
-  const signalsDir = workflowPath(SIGNALS_DIR);
-  ensureDir(signalsDir);
-  writeFileSync(join(signalsDir, `${name}.done`), new Date().toISOString());
-  logSuccess(`Signal: ${name}.done`);
-}
-
-function clearSignals(patterns: string[]): void {
-  const signalsDir = workflowPath(SIGNALS_DIR);
-  if (!fileExists(signalsDir)) return;
-
-  const files = readdirSync(signalsDir);
-  for (const file of files) {
-    const name = file.replace(".done", "");
-    if (patterns.includes(name) || patterns.includes("*")) {
-      const path = join(signalsDir, file);
-      try {
-        execSync(`rm "${path}"`);
-        logInfo(`Cleared signal: ${file}`);
-      } catch {
-        // Ignore
-      }
-    }
-  }
-}
-
-// ============================================================================
-// Tmux Management
-// ============================================================================
-
-function tmuxExists(): boolean {
+function syncStateToFile(state: WorkflowState): void {
+  const stateFile = workflowPath("state.json");
   try {
-    execSync("which tmux", { stdio: "ignore" });
-    return true;
+    const stateData = {
+      state: state.phase,
+      iteration: state.iteration,
+      startedAt: new Date().toISOString(),
+      lastUpdated: new Date().toISOString(),
+      signals: state.signals,
+      errors: [],
+    };
+    writeFileSync(stateFile, JSON.stringify(stateData, null, 2));
   } catch {
-    return false;
+    // Ignore write errors
   }
 }
 
-function tmuxSessionExists(session: string): boolean {
-  try {
-    execSync(`tmux has-session -t "${session}" 2>/dev/null`, { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
+function getReviewStatus(signals: Record<string, boolean>): "PASS" | "FAIL" | "PENDING" {
+  // Don't trust REVIEW.md unless review.done signal exists
+  if (!signals.review) return "PENDING";
 
-function tmuxCreateSession(session: string): void {
-  if (tmuxSessionExists(session)) {
-    logInfo(`Session '${session}' already exists`);
-    return;
-  }
-  execSync(`tmux new-session -d -s "${session}" -n "orchestrate"`);
-  logSuccess(`Created tmux session: ${session}`);
-}
-
-function tmuxCreateWindow(session: string, name: string): void {
-  try {
-    execSync(`tmux new-window -t "${session}" -n "${name}"`);
-    logSuccess(`Created window: ${name}`);
-  } catch {
-    logInfo(`Window '${name}' may already exist`);
-  }
-}
-
-function tmuxSplitPane(session: string, window: string, direction: "h" | "v"): void {
-  const flag = direction === "h" ? "-h" : "-v";
-  execSync(`tmux split-window ${flag} -t "${session}:${window}"`);
-}
-
-function tmuxSendKeys(session: string, window: string, pane: number, command: string): void {
-  execSync(`tmux send-keys -t "${session}:${window}.${pane}" '${command}' Enter`);
-}
-
-function tmuxSelectLayout(session: string, window: string, layout: string): void {
-  execSync(`tmux select-layout -t "${session}:${window}" ${layout}`);
-}
-
-function setupTmuxWorkspace(): void {
-  if (!tmuxExists()) {
-    logError("tmux is not installed. Please install tmux first.");
-    process.exit(1);
-  }
-
-  const config = getConfig();
-  const session = config.tmuxSession;
-
-  log("Setting up tmux workspace...", "bright");
-
-  // Create session with orchestrate window
-  tmuxCreateSession(session);
-
-  // Window 1: PLAN
-  tmuxCreateWindow(session, "plan");
-  tmuxSendKeys(session, "plan", 0, `cd "${process.cwd()}"`);
-
-  // Window 2: IMPLEMENT (3 panes)
-  tmuxCreateWindow(session, "implement");
-  tmuxSplitPane(session, "implement", "h");
-  tmuxSplitPane(session, "implement", "h");
-  tmuxSelectLayout(session, "implement", "even-horizontal");
-
-  // Send cd to all implement panes
-  for (let i = 0; i < 3; i++) {
-    tmuxSendKeys(session, "implement", i, `cd "${process.cwd()}"`);
-  }
-
-  // Window 3: REVIEW
-  tmuxCreateWindow(session, "review");
-  tmuxSendKeys(session, "review", 0, `cd "${process.cwd()}"`);
-
-  // Window 4: REFINE (3 panes)
-  tmuxCreateWindow(session, "refine");
-  tmuxSplitPane(session, "refine", "h");
-  tmuxSplitPane(session, "refine", "h");
-  tmuxSelectLayout(session, "refine", "even-horizontal");
-
-  for (let i = 0; i < 3; i++) {
-    tmuxSendKeys(session, "refine", i, `cd "${process.cwd()}"`);
-  }
-
-  // Window 5: COMPOUND
-  tmuxCreateWindow(session, "compound");
-  tmuxSendKeys(session, "compound", 0, `cd "${process.cwd()}"`);
-
-  logSuccess(`Tmux workspace ready: ${session}`);
-  log(`Attach with: tmux attach -t ${session}`, "cyan");
-}
-
-// ============================================================================
-// Worker Prompts
-// ============================================================================
-
-function getPlanPrompt(featureDescription: string): string {
-  return `You are the ARCHITECT in a CompoundEngineering workflow.
-
-## Your Task
-Plan the feature: "${featureDescription}"
-
-## Process
-1. Ask me clarifying questions about requirements
-2. Explore the codebase for existing patterns
-3. Design the implementation approach
-
-## Required Outputs
-When I approve the plan, create these files:
-
-1. \`.workflow/PLAN.md\` - High-level implementation plan
-2. \`.workflow/contracts/\` - TypeScript interface files
-3. \`.workflow/tasks/backend.md\` - Backend worker tasks
-4. \`.workflow/tasks/frontend.md\` - Frontend worker tasks
-5. \`.workflow/tasks/tests.md\` - Tests worker tasks
-
-## Task File Format
-Each task file must include:
-- Contract references (what interfaces to import)
-- Ordered task list with specific files and actions
-- Constraints for that domain
-- "Done when" checklist
-
-## When Complete
-After I approve the plan:
-\`\`\`bash
-touch .workflow/signals/plan.done
-\`\`\`
-
-Start by asking your clarifying questions.`;
-}
-
-function getWorkerPrompt(workerType: string): string {
-  const scopeMap: Record<string, { allowed: string; forbidden: string }> = {
-    backend: {
-      allowed: "src/backend/**, src/api/**, src/lib/**, src/db/**, src/server/**",
-      forbidden: "src/frontend/**, src/components/**, tests/**",
-    },
-    frontend: {
-      allowed: "src/frontend/**, src/components/**, src/pages/**, src/app/**",
-      forbidden: "src/backend/**, src/api/**, tests/**",
-    },
-    tests: {
-      allowed: "tests/**, **/*.test.ts, **/*.spec.ts, **/__tests__/**",
-      forbidden: "src/** (except test files)",
-    },
-  };
-
-  const scope = scopeMap[workerType] || scopeMap.backend;
-
-  return `You are the ${workerType.toUpperCase()} WORKER in a parallel implementation workflow.
-
-## Your Scope
-- ONLY modify: ${scope.allowed}
-- NEVER modify: ${scope.forbidden}
-
-## Your Task
-Read your task file: \`.workflow/tasks/${workerType}.md\`
-Import types from: \`.workflow/contracts/\`
-
-## Process
-1. Read your task file completely
-2. Read the contracts for type definitions
-3. Implement each task in order
-4. Verify your changes compile
-
-## Constraints
-- Follow existing code patterns in the codebase
-- All new code must be type-safe
-- Stay within your allowed file scope
-- Do NOT modify other domains
-
-## When Complete
-1. Verify compilation: \`bun run tsc --noEmit\` (or equivalent)
-2. Signal done: \`touch .workflow/signals/${workerType}.done\`
-
-Begin by reading your task file.`;
-}
-
-function getReviewPrompt(): string {
-  return `Run the CompoundEngineering Review workflow.
-
-## Scope
-Review all changes: \`git diff main...HEAD\`
-Also check: \`.workflow/PLAN.md\` for requirements compliance
-
-## Review Process
-Launch 4 parallel review agents for:
-1. Security - OWASP top 10, auth issues, injection
-2. Performance - O(n²), N+1 queries, memory leaks
-3. Correctness - Logic errors, edge cases, type safety
-4. Maintainability - Code clarity, DRY, patterns
-
-## Additional Checks
-- Run test suite: \`bun test\`
-- Validate contracts are implemented
-- Check all task file items completed
-
-## Output
-Write \`.workflow/REVIEW.md\` with:
-
-\`\`\`markdown
-## Status: PASS | FAIL
-
-### Critical Issues (must fix)
-- [ ] Issue 1
-- [ ] Issue 2
-
-### Recommended (should fix)
-- [ ] Issue 1
-
-### Minor (optional)
-- Issue 1
-
-### Test Results
-[test output summary]
-\`\`\`
-
-## When Complete
-\`touch .workflow/signals/review.done\``;
-}
-
-function getRefinePrompt(workerType: string): string {
-  return `You are the ${workerType.toUpperCase()} REFINE WORKER.
-
-## Your Task
-Read \`.workflow/REVIEW.md\` and fix issues in your domain.
-
-## Your Scope (same as implementation)
-${workerType === "backend" ? "src/backend/**, src/api/**, src/lib/**, src/db/**" : ""}
-${workerType === "frontend" ? "src/frontend/**, src/components/**, src/pages/**" : ""}
-${workerType === "tests" ? "tests/**, **/*.test.ts, **/*.spec.ts" : ""}
-
-## Process
-1. Read REVIEW.md for issues in your domain
-2. Fix critical issues first
-3. Then recommended issues
-4. Skip minor issues unless quick
-
-## When Complete
-\`touch .workflow/signals/${workerType}-refine.done\``;
-}
-
-function getCompoundPrompt(): string {
-  return `Run the CompoundEngineering Compound workflow.
-
-## Context
-We just completed a feature implementation using the parallel workflow.
-
-## Your Task
-Extract learnings from this session:
-1. What patterns emerged that could be reused?
-2. What mistakes were made that should be avoided?
-3. What was surprisingly difficult or easy?
-
-## Reference
-- \`.workflow/PLAN.md\` - Original plan
-- \`.workflow/REVIEW.md\` - Issues found
-- Git diff for actual changes
-
-## Output
-Save learnings to: \`~/.claude/History/Learnings/$(date +%Y-%m-%d)-[topic].md\`
-
-## When Complete
-\`touch .workflow/signals/compound.done\``;
-}
-
-// ============================================================================
-// State Machine
-// ============================================================================
-
-async function runStateMachine(): Promise<void> {
-  log("Starting orchestrator state machine...", "bright");
-
-  const config = getConfig();
-  let running = true;
-
-  // Handle graceful shutdown
-  process.on("SIGINT", () => {
-    log("\nShutting down orchestrator...", "yellow");
-    running = false;
-  });
-
-  while (running) {
-    const status = getStatus();
-    const signals = getSignals();
-
-    switch (status.state) {
-      case "init":
-        logInfo("Waiting for planning to start...");
-        logInfo("Run: claude \"Plan: [your feature]\" in the plan window");
-        // Transition when any activity in .workflow/
-        if (fileExists(workflowPath("PLAN.md")) || signals.plan) {
-          setState("planning");
-        }
-        break;
-
-      case "planning":
-        if (signals.plan) {
-          logSuccess("Plan complete! Starting implementation...");
-          setState("implementing");
-          // Launch workers
-          launchImplementWorkers(config);
-        }
-        break;
-
-      case "implementing":
-        const implSignals = config.workers.map((w) => signals[w]);
-        const implComplete = implSignals.every(Boolean);
-        const implProgress = implSignals.filter(Boolean).length;
-
-        if (implComplete) {
-          logSuccess("All workers complete! Starting review...");
-          setState("reviewing");
-          launchReview(config);
-        } else {
-          logInfo(`Implementation progress: ${implProgress}/${config.workers.length} workers done`);
-        }
-        break;
-
-      case "reviewing":
-        if (signals.review) {
-          const reviewStatus = checkReviewStatus();
-          if (reviewStatus === "PASS") {
-            logSuccess("Review passed! Starting compound...");
-            setState("compounding");
-            launchCompound(config);
-          } else if (reviewStatus === "FAIL") {
-            const iteration = status.iteration + 1;
-            if (iteration >= config.maxIterations) {
-              logError(`Review failed after ${config.maxIterations} iterations. Escalating.`);
-              escalateToHuman();
-              setState("failed");
-            } else {
-              logInfo(`Review found issues. Starting refine iteration ${iteration}...`);
-              updateStatus({ iteration });
-              clearSignals(config.workers.map((w) => `${w}-refine`));
-              clearSignals(["review"]);
-              setState("refining");
-              launchRefineWorkers(config);
-            }
-          }
-        }
-        break;
-
-      case "refining":
-        const refineSignals = config.workers.map((w) => signals[`${w}-refine`]);
-        const refineComplete = refineSignals.every(Boolean);
-
-        if (refineComplete) {
-          logSuccess("Refine complete! Re-running review...");
-          clearSignals(["review"]);
-          setState("reviewing");
-          launchReview(config);
-        }
-        break;
-
-      case "compounding":
-        if (signals.compound) {
-          logSuccess("Workflow complete!");
-          setState("complete");
-          running = false;
-        }
-        break;
-
-      case "complete":
-      case "failed":
-        running = false;
-        break;
-    }
-
-    // Poll every 5 seconds
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-
-  log("Orchestrator stopped.", "dim");
-}
-
-function launchImplementWorkers(config: WorkflowConfig): void {
-  const session = config.tmuxSession;
-
-  config.workers.forEach((worker, index) => {
-    const prompt = getWorkerPrompt(worker);
-    logInfo(`Launching ${worker} worker...`);
-
-    // Send prompt to appropriate pane
-    const escapedPrompt = prompt.replace(/'/g, "'\"'\"'");
-    tmuxSendKeys(session, "implement", index, `claude "${escapedPrompt}"`);
-  });
-}
-
-function launchReview(config: WorkflowConfig): void {
-  const session = config.tmuxSession;
-  const prompt = getReviewPrompt();
-  const escapedPrompt = prompt.replace(/'/g, "'\"'\"'");
-
-  logInfo("Launching review...");
-  tmuxSendKeys(session, "review", 0, `claude "${escapedPrompt}"`);
-}
-
-function launchRefineWorkers(config: WorkflowConfig): void {
-  const session = config.tmuxSession;
-
-  config.workers.forEach((worker, index) => {
-    const prompt = getRefinePrompt(worker);
-    logInfo(`Launching ${worker} refine worker...`);
-
-    const escapedPrompt = prompt.replace(/'/g, "'\"'\"'");
-    tmuxSendKeys(session, "refine", index, `claude "${escapedPrompt}"`);
-  });
-}
-
-function launchCompound(config: WorkflowConfig): void {
-  const session = config.tmuxSession;
-  const prompt = getCompoundPrompt();
-  const escapedPrompt = prompt.replace(/'/g, "'\"'\"'");
-
-  logInfo("Launching compound...");
-  tmuxSendKeys(session, "compound", 0, `claude "${escapedPrompt}"`);
-}
-
-function checkReviewStatus(): "PASS" | "FAIL" | "UNKNOWN" {
   const reviewPath = workflowPath("REVIEW.md");
-  if (!fileExists(reviewPath)) return "UNKNOWN";
+  if (!fileExists(reviewPath)) return "PENDING";
 
-  const content = readFileSync(reviewPath, "utf-8");
-
-  if (content.includes("Status: PASS") || content.includes("## Status: PASS")) {
-    return "PASS";
+  try {
+    const content = readFileSync(reviewPath, "utf-8");
+    if (content.includes("STATUS: PASS")) return "PASS";
+    if (content.includes("STATUS: FAIL")) return "FAIL";
+  } catch {
+    // File might not be readable
   }
-  if (content.includes("Status: FAIL") || content.includes("## Status: FAIL")) {
-    return "FAIL";
-  }
-
-  // Check for critical issues
-  if (content.includes("### Critical Issues") && !content.includes("### Critical Issues\n\n###")) {
-    return "FAIL";
-  }
-
-  return "PASS"; // Default to pass if no explicit fail
-}
-
-function escalateToHuman(): void {
-  log("", "reset");
-  log("═══════════════════════════════════════════════════════", "red");
-  log("  ESCALATION: Review failed after maximum iterations", "red");
-  log("═══════════════════════════════════════════════════════", "red");
-  log("", "reset");
-  log("Remaining issues in .workflow/REVIEW.md", "yellow");
-  log("", "reset");
-  log("Options:", "bright");
-  log("  1. Fix manually, then: orchestrate.ts signal review", "reset");
-  log("  2. Force continue:     orchestrate.ts signal review --force", "reset");
-  log("  3. Abort workflow:     orchestrate.ts reset", "reset");
-  log("", "reset");
+  return "PENDING";
 }
 
 // ============================================================================
-// Commands
+// Git & Commit Functions
 // ============================================================================
 
-function cmdInit(): void {
-  log("Initializing workflow directory...", "bright");
+function getFeatureNameFromPlan(): string {
+  const planPath = workflowPath("PLAN.md");
+  if (fileExists(planPath)) {
+    try {
+      const planContent = readFileSync(planPath, "utf-8");
+      const titleMatch = planContent.match(/^#\s+(.+)$/m);
+      if (titleMatch) {
+        return titleMatch[1];
+      }
+    } catch {
+      // Ignore read errors
+    }
+  }
+  return "CE workflow feature";
+}
 
-  // Create directory structure
-  ensureDir(workflowPath());
-  ensureDir(workflowPath(SIGNALS_DIR));
-  ensureDir(workflowPath("contracts"));
-  ensureDir(workflowPath("tasks"));
-  ensureDir(workflowPath("logs"));
+function generateSlug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
+}
 
-  // Write default config
-  writeJson(workflowPath(CONFIG_FILE), DEFAULT_CONFIG);
+function createFeatureBranch(featureName: string): { branch: string; success: boolean; error?: string } {
+  try {
+    const currentBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf-8" }).trim();
 
-  // Write initial state
-  const initialStatus: WorkflowStatus = {
+    // Only create new branch if on main/master
+    if (currentBranch !== "main" && currentBranch !== "master") {
+      return { branch: currentBranch, success: true };
+    }
+
+    const slug = generateSlug(featureName);
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const branch = `compound/${date}-${slug}`;
+
+    execSync(`git checkout -b ${branch}`, { stdio: "ignore" });
+    return { branch, success: true };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    return { branch: "", success: false, error };
+  }
+}
+
+function commitPhase(type: string, featureName: string, scope?: string): { success: boolean; error?: string } {
+  try {
+    // Stage all changes
+    execSync("git add -A", { stdio: "ignore" });
+    // Exclude .workflow/
+    execSync("git reset HEAD -- .workflow/", { stdio: "ignore" });
+
+    // Check if there are staged changes
+    const staged = execSync("git diff --cached --name-only", { encoding: "utf-8" }).trim();
+    if (!staged) {
+      return { success: true }; // Nothing to commit is fine
+    }
+
+    const scopePart = scope ? `(${scope})` : "";
+    const message = `${type}${scopePart}: ${featureName}
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>`;
+
+    execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { stdio: "ignore" });
+    return { success: true };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    return { success: false, error };
+  }
+}
+
+function getCommitCount(): number {
+  try {
+    const mainBranch = execSync("git rev-parse --verify main 2>/dev/null || echo master", { encoding: "utf-8" }).trim();
+    const count = execSync(`git rev-list --count ${mainBranch}..HEAD 2>/dev/null || echo 0`, { encoding: "utf-8" }).trim();
+    return parseInt(count, 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function getCurrentBranch(): string {
+  try {
+    return execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf-8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
+function determinePhase(signals: Record<string, boolean>): Phase {
+  if (signals.compound) return "complete";
+
+  const reviewStatus = getReviewStatus(signals);
+
+  if (signals.review && reviewStatus === "PASS") return "compounding";
+
+  if (signals["backend-refine"] && signals["frontend-refine"] && signals["tests-refine"]) {
+    return "reviewing"; // Ready for re-review after refine
+  }
+
+  if (signals.review && reviewStatus === "FAIL") return "refining";
+
+  if (signals.backend && signals.frontend && signals.tests) return "reviewing";
+
+  if (signals.plan) return "implementing";
+
+  if (fileExists(workflowPath("PLAN.md"))) return "planning";
+
+  return "init";
+}
+
+// ============================================================================
+// Tmux Commands
+// ============================================================================
+
+function tmuxSendKeys(window: number, text: string): void {
+  try {
+    // Escape single quotes in the text
+    const escaped = text.replace(/'/g, "'\"'\"'");
+    // Send text first, then Enter separately to ensure it's executed
+    execSync(`tmux send-keys -t ${SESSION_NAME}:${window} '${escaped}'`, { stdio: "ignore" });
+    execSync(`tmux send-keys -t ${SESSION_NAME}:${window} Enter`, { stdio: "ignore" });
+  } catch (e) {
+    console.error(`Failed to send keys to window ${window}`);
+  }
+}
+
+function dispatchWorker(worker: string, window: number, isRefine: boolean = false): void {
+  const taskFile = `.workflow/tasks/${worker}.md`;
+  const signalFile = isRefine
+    ? `.workflow/signals/${worker}-refine.done`
+    : `.workflow/signals/${worker}.done`;
+
+  const phase = isRefine ? "REFINE" : "";
+  const taskSource = isRefine ? ".workflow/REVIEW.md" : taskFile;
+
+  const prompt = `You are the ${worker.toUpperCase()} ${phase} worker for this Compound Engineering session.
+
+## YOUR TASK
+${isRefine ? `Read .workflow/REVIEW.md and fix issues in your domain.` : `Read and implement: ${taskFile}`}
+
+## CONTRACTS
+Import types from: .workflow/contracts/
+
+## SCOPE
+${worker === "backend" ? "ONLY modify: src/backend/**, src/api/**, src/lib/**, src/db/**, src/server/**, src/app/api/**" : ""}
+${worker === "frontend" ? "ONLY modify: src/frontend/**, src/components/**, src/app/** (except api/)" : ""}
+${worker === "tests" ? "ONLY modify: tests/**, **/*.test.ts, **/*.spec.ts" : ""}
+
+## COMPLETION
+When done: touch ${signalFile}
+
+## IMPORTANT
+- Do NOT send tmux commands to other windows
+- Do NOT try to coordinate with other workers
+- Just do your task and signal done
+
+START by reading: cat ${taskSource}`;
+
+  tmuxSendKeys(window, prompt);
+}
+
+function dispatchReview(): void {
+  // Clear old review state for fresh re-review
+  const reviewSignal = workflowPath("signals/review.done");
+  const reviewFile = workflowPath("REVIEW.md");
+
+  if (fileExists(reviewSignal)) {
+    unlinkSync(reviewSignal);
+  }
+  if (fileExists(reviewFile)) {
+    // Rename to backup for reference
+    const backupPath = workflowPath(`REVIEW-${Date.now()}.md`);
+    renameSync(reviewFile, backupPath);
+  }
+
+  const prompt = `You are the REVIEW worker. All implementation workers have completed.
+
+## YOUR TASK
+1. Run the test suite: bun test
+2. Run type checking: bun run tsc --noEmit
+3. Review all changes in .workflow/ and src/
+4. Check for security, performance, correctness, maintainability
+
+## OUTPUT
+Create .workflow/REVIEW.md with:
+- Summary of changes
+- Issues found (if any)
+- STATUS: PASS or STATUS: FAIL
+
+## COMPLETION
+When done: touch .workflow/signals/review.done
+
+## IMPORTANT
+- Do NOT send tmux commands to other windows
+- Do NOT try to fix issues yourself
+- Just report findings and signal done
+
+START by checking signals: ls -la .workflow/signals/`;
+
+  tmuxSendKeys(WINDOWS.review, prompt);
+}
+
+function dispatchCompound(): void {
+  const date = new Date();
+  const monthDir = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  const filename = `${date.toISOString().split("T")[0]}-ce-learnings.md`;
+
+  const prompt = `You are now in COMPOUND mode. The feature is complete and review passed!
+
+## YOUR TASK
+Extract learnings from this session to make future CE sessions smoother.
+
+## ANALYZE
+1. Read .workflow/PLAN.md - the original plan
+2. Read .workflow/REVIEW.md - issues found during review
+3. Run: git diff main...HEAD --stat
+
+## DOCUMENT LEARNINGS
+Create: ~/.claude/History/Learnings/${monthDir}/${filename}
+
+Include:
+- What patterns emerged that should be reused?
+- What mistakes were made that should be avoided?
+- What task file instructions were unclear or missing?
+- Specific improvements for the CE workflow
+
+## COMPLETION
+When done: touch .workflow/signals/compound.done
+
+START by reading the plan: cat .workflow/PLAN.md`;
+
+  tmuxSendKeys(WINDOWS.plan, prompt);
+}
+
+function gitCommitAndPR(featureName?: string): { success: boolean; prUrl?: string; error?: string } {
+  try {
+    // Get current branch
+    const currentBranch = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf-8" }).trim();
+
+    // Check if on main - if so, create a feature branch (fallback if branch wasn't created earlier)
+    let branch = currentBranch;
+    if (currentBranch === "main" || currentBranch === "master") {
+      const name = featureName || getFeatureNameFromPlan();
+      const slug = generateSlug(name);
+      const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      branch = `compound/${date}-${slug}`;
+      execSync(`git checkout -b ${branch}`, { stdio: "ignore" });
+    }
+
+    // Get feature name if not provided
+    const name = featureName || getFeatureNameFromPlan();
+
+    // Check for any uncommitted changes and commit them
+    execSync("git add -A", { stdio: "ignore" });
+    execSync("git reset HEAD -- .workflow/", { stdio: "ignore" });
+    const staged = execSync("git diff --cached --name-only", { encoding: "utf-8" }).trim();
+
+    if (staged) {
+      // Commit any remaining changes
+      const commitMessage = `chore: final cleanup for ${name}
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>`;
+
+      execSync(`git commit -m "${commitMessage.replace(/"/g, '\\"')}"`, { stdio: "ignore" });
+    }
+
+    // Check if we have any commits to push
+    const mainBranch = execSync("git rev-parse --verify main 2>/dev/null || echo master", { encoding: "utf-8" }).trim();
+    const commitCount = execSync(`git rev-list --count ${mainBranch}..HEAD 2>/dev/null || echo 0`, { encoding: "utf-8" }).trim();
+
+    if (parseInt(commitCount, 10) === 0) {
+      return { success: false, error: "No commits to create PR from" };
+    }
+
+    // Push to remote
+    execSync(`git push -u origin ${branch}`, { stdio: "ignore" });
+
+    // Create PR with richer description
+    const prBody = `## Summary
+Implemented **${name}** using Compound Engineering workflow.
+
+## Commits
+This PR contains ${commitCount} commit(s) from the CE workflow:
+- Planning and design
+- Implementation (backend, frontend, tests in parallel)
+- Review feedback fixes (if any)
+
+## Test plan
+- [ ] Manual testing completed
+- [ ] Type checking passes (\`bun run tsc --noEmit\`)
+- [ ] All tests pass (\`bun test\`)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
+
+    const prOutput = execSync(
+      `gh pr create --title "feat: ${name}" --body "${prBody.replace(/"/g, '\\"')}"`,
+      { encoding: "utf-8" }
+    ).trim();
+
+    // Extract PR URL from output
+    const urlMatch = prOutput.match(/https:\/\/github\.com\/[^\s]+/);
+    const prUrl = urlMatch ? urlMatch[0] : prOutput;
+
+    return { success: true, prUrl };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    return { success: false, error };
+  }
+}
+
+function clearWorkflow(): void {
+  // Clear all signal files
+  const signalsDir = workflowPath("signals");
+  if (fileExists(signalsDir)) {
+    const files = readdirSync(signalsDir);
+    for (const file of files) {
+      unlinkSync(join(signalsDir, file));
+    }
+  }
+
+  // Remove planning artifacts
+  const filesToRemove = ["PLAN.md", "REVIEW.md"];
+  for (const file of filesToRemove) {
+    const path = workflowPath(file);
+    if (fileExists(path)) {
+      unlinkSync(path);
+    }
+  }
+
+  // Clear contracts directory contents
+  const contractsDir = workflowPath("contracts");
+  if (fileExists(contractsDir)) {
+    const files = readdirSync(contractsDir);
+    for (const file of files) {
+      unlinkSync(join(contractsDir, file));
+    }
+  }
+
+  // Clear tasks directory contents
+  const tasksDir = workflowPath("tasks");
+  if (fileExists(tasksDir)) {
+    const files = readdirSync(tasksDir);
+    for (const file of files) {
+      unlinkSync(join(tasksDir, file));
+    }
+  }
+
+  // Reset state.json to init
+  const stateFile = workflowPath("state.json");
+  const initialState = {
     state: "init",
     iteration: 0,
     startedAt: new Date().toISOString(),
@@ -720,264 +508,504 @@ function cmdInit(): void {
     signals: {},
     errors: [],
   };
-  writeJson(workflowPath(STATE_FILE), initialStatus);
+  writeFileSync(stateFile, JSON.stringify(initialState, null, 2));
 
-  // Create .gitignore for workflow directory
-  writeFileSync(
-    workflowPath(".gitignore"),
-    `# Workflow artifacts (don't commit)
-signals/
-logs/
-state.json
-`
-  );
-
-  logSuccess("Workflow initialized: .workflow/");
-  log("", "reset");
-  log("Next steps:", "bright");
-  log("  1. Set up tmux:  orchestrate.ts tmux", "reset");
-  log("  2. Start orchestrator: orchestrate.ts start", "reset");
-  log("  3. Begin planning in the plan window", "reset");
-}
-
-function cmdStatus(): void {
-  if (!fileExists(workflowPath())) {
-    logError("No workflow found. Run: orchestrate.ts init");
-    return;
-  }
-
-  const status = getStatus();
-  const config = getConfig();
-  const signals = getSignals();
-
-  log("", "reset");
-  log("═══════════════════════════════════════════════════════", "bright");
-  log("  Compound Engineering Workflow Status", "bright");
-  log("═══════════════════════════════════════════════════════", "bright");
-  log("", "reset");
-
-  logState(status.state);
-  log(`Iteration: ${status.iteration}/${config.maxIterations}`, "reset");
-  log(`Started: ${status.startedAt}`, "dim");
-  log(`Updated: ${status.lastUpdated}`, "dim");
-  log("", "reset");
-
-  log("Signals:", "bright");
-  const allSignals = ["plan", ...config.workers, "review", ...config.workers.map((w) => `${w}-refine`), "compound"];
-  for (const sig of allSignals) {
-    const icon = signals[sig] ? "✓" : "○";
-    const color = signals[sig] ? "green" : "dim";
-    log(`  ${icon} ${sig}`, color);
-  }
-
-  log("", "reset");
-  log("Files:", "bright");
-  const files = ["PLAN.md", "REVIEW.md", "contracts/", "tasks/"];
-  for (const file of files) {
-    const exists = fileExists(workflowPath(file));
-    const icon = exists ? "✓" : "○";
-    const color = exists ? "green" : "dim";
-    log(`  ${icon} .workflow/${file}`, color);
-  }
-  log("", "reset");
-}
-
-function cmdWatch(): void {
-  if (!fileExists(workflowPath())) {
-    logError("No workflow found. Run: orchestrate.ts init");
-    return;
-  }
-
-  log("Watching workflow status (Ctrl+C to stop)...", "bright");
-  log("", "reset");
-
-  // Initial status
-  cmdStatus();
-
-  // Watch for changes
-  const signalsDir = workflowPath(SIGNALS_DIR);
-  ensureDir(signalsDir);
-
-  watch(signalsDir, (eventType, filename) => {
-    if (filename) {
-      log(`Signal changed: ${filename}`, "cyan");
-      cmdStatus();
+  // Clear Claude sessions in worker windows (2-6: Plan, Backend, Frontend, Tests, Review)
+  // Send /clear command to each Claude Code session
+  const workerWindows = [2, 3, 4, 5, 6]; // Plan, Backend, Frontend, Tests, Review
+  for (const windowNum of workerWindows) {
+    try {
+      // Cancel any pending input first
+      execSync(`tmux send-keys -t ${SESSION_NAME}:${windowNum} C-c`, { stdio: "ignore" });
+      // Send /clear then Enter (select autocomplete) then Enter again (submit)
+      execSync(`tmux send-keys -t ${SESSION_NAME}:${windowNum} '/clear' Enter`, { stdio: "ignore" });
+      execSync(`sleep 0.2 && tmux send-keys -t ${SESSION_NAME}:${windowNum} Enter`, { stdio: "ignore" });
+    } catch {
+      // Window might not exist or Claude not running - ignore
     }
+  }
+}
+
+// ============================================================================
+// UI Rendering
+// ============================================================================
+
+function renderHeader(): void {
+  console.log(`${C.bgBlue}${C.white}${C.bold}                                                                    ${C.reset}`);
+  console.log(`${C.bgBlue}${C.white}${C.bold}   ⚡ COMPOUND ENGINEERING ORCHESTRATOR                             ${C.reset}`);
+  console.log(`${C.bgBlue}${C.white}${C.bold}                                                                    ${C.reset}`);
+  console.log();
+}
+
+function renderGitInfo(branchName?: string, commitCount?: number): void {
+  const branch = branchName || getCurrentBranch();
+  const commits = commitCount ?? getCommitCount();
+  const isOnMain = branch === "main" || branch === "master";
+
+  console.log(`  ${C.bold}Branch:${C.reset} ${isOnMain ? C.dim : C.cyan}${branch}${C.reset}    ${C.bold}Commits:${C.reset} ${commits > 0 ? C.green : C.dim}${commits}${C.reset}`);
+  console.log();
+}
+
+function renderPhase(phase: Phase, iteration: number): void {
+  const phaseColors: Record<Phase, string> = {
+    init: C.dim,
+    planning: C.yellow,
+    implementing: C.blue,
+    reviewing: C.magenta,
+    refining: C.yellow,
+    compounding: C.cyan,
+    complete: C.green,
+  };
+
+  const phaseLabels: Record<Phase, string> = {
+    init: "INITIALIZING",
+    planning: "PLANNING",
+    implementing: "IMPLEMENTING",
+    reviewing: "REVIEWING",
+    refining: "REFINING",
+    compounding: "COMPOUNDING",
+    complete: "COMPLETE ✓",
+  };
+
+  console.log(`  ${C.bold}Phase:${C.reset} ${phaseColors[phase]}${phaseLabels[phase]}${C.reset}    ${C.dim}Iteration: ${iteration}/3${C.reset}`);
+  console.log();
+}
+
+function renderSignals(signals: Record<string, boolean>): void {
+  console.log(`  ${C.bold}Signals:${C.reset}`);
+
+  const coreSignals = ["plan", "backend", "frontend", "tests", "review"];
+  const refineSignals = ["backend-refine", "frontend-refine", "tests-refine"];
+
+  // Core signals
+  let line = "    ";
+  for (const sig of coreSignals) {
+    const icon = signals[sig] ? `${C.green}✓${C.reset}` : `${C.dim}○${C.reset}`;
+    line += `${icon} ${sig}  `;
+  }
+  console.log(line);
+
+  // Refine signals (only show if in refine phase)
+  const inRefine = signals.review && getReviewStatus(signals) === "FAIL";
+  if (inRefine || refineSignals.some(s => signals[s])) {
+    line = "    ";
+    for (const sig of refineSignals) {
+      const icon = signals[sig] ? `${C.green}✓${C.reset}` : `${C.dim}○${C.reset}`;
+      line += `${icon} ${sig.replace("-refine", "-ref")}  `;
+    }
+    console.log(line);
+  }
+
+  // Compound signal
+  const compoundIcon = signals.compound ? `${C.green}✓${C.reset}` : `${C.dim}○${C.reset}`;
+  console.log(`    ${compoundIcon} compound`);
+
+  console.log();
+}
+
+function renderFiles(): void {
+  console.log(`  ${C.bold}Files:${C.reset}`);
+
+  const files = [
+    { path: "PLAN.md", label: "PLAN.md" },
+    { path: "REVIEW.md", label: "REVIEW.md" },
+    { path: "contracts", label: "contracts/" },
+    { path: "tasks", label: "tasks/" },
+  ];
+
+  let line = "    ";
+  for (const file of files) {
+    const exists = fileExists(workflowPath(file.path));
+    const icon = exists ? `${C.green}✓${C.reset}` : `${C.dim}○${C.reset}`;
+    line += `${icon} ${file.label}  `;
+  }
+  console.log(line);
+  console.log();
+}
+
+function renderNextAction(phase: Phase, signals: Record<string, boolean>): void {
+  console.log(`  ${C.bold}${C.yellow}▶ Next Action:${C.reset}`);
+
+  switch (phase) {
+    case "init":
+      console.log(`    Go to Plan window (Ctrl+b 2) and describe your feature`);
+      break;
+    case "planning":
+      console.log(`    Wait for Architect to create PLAN.md, then approve`);
+      console.log(`    Press ${C.bold}[P]${C.reset} to signal plan approved and dispatch workers`);
+      break;
+    case "implementing":
+      const implDone = signals.backend && signals.frontend && signals.tests;
+      if (implDone) {
+        console.log(`    All workers done! Press ${C.bold}[R]${C.reset} to dispatch review`);
+      } else {
+        console.log(`    Waiting for workers to complete...`);
+        console.log(`    ${C.dim}(Check windows 3-5 for progress)${C.reset}`);
+      }
+      break;
+    case "reviewing":
+      // Check if refine already completed (post-refine review needed)
+      const refineComplete = signals["backend-refine"] && signals["frontend-refine"] && signals["tests-refine"];
+
+      if (refineComplete) {
+        // Refine done, need to re-run review
+        console.log(`    ${C.yellow}Refine complete.${C.reset} Press ${C.bold}[R]${C.reset} to re-run review`);
+      } else if (signals.review) {
+        const status = getReviewStatus(signals);
+        if (status === "PASS") {
+          console.log(`    ${C.green}Review PASSED!${C.reset} Press ${C.bold}[C]${C.reset} to dispatch compound`);
+        } else if (status === "FAIL") {
+          console.log(`    ${C.red}Review FAILED.${C.reset} Press ${C.bold}[F]${C.reset} to dispatch refine workers`);
+        } else {
+          console.log(`    Waiting for review to complete...`);
+        }
+      } else {
+        console.log(`    Waiting for review to complete...`);
+        console.log(`    ${C.dim}(Check window 6 for progress)${C.reset}`);
+      }
+      break;
+    case "refining":
+      const refineDone = signals["backend-refine"] && signals["frontend-refine"] && signals["tests-refine"];
+      if (refineDone) {
+        console.log(`    Refine complete! Press ${C.bold}[R]${C.reset} to re-run review`);
+      } else {
+        console.log(`    Waiting for refine workers to complete...`);
+      }
+      break;
+    case "compounding":
+      if (signals.compound) {
+        console.log(`    ${C.green}Compound complete!${C.reset} Press ${C.bold}[G]${C.reset} to commit & create PR`);
+      } else {
+        console.log(`    Waiting for compound to complete...`);
+        console.log(`    ${C.dim}(Check window 2 for progress)${C.reset}`);
+      }
+      break;
+    case "complete":
+      console.log(`    ${C.green}🎉 Workflow complete! PR created.${C.reset}`);
+      console.log(`    Press ${C.bold}[Q]${C.reset} to exit`);
+      break;
+  }
+
+  console.log();
+}
+
+function renderMenu(): void {
+  console.log(`  ${C.dim}─────────────────────────────────────────────────────${C.reset}`);
+  console.log(`  ${C.bold}Commands:${C.reset}`);
+  console.log(`    ${C.cyan}[P]${C.reset} Plan done → Dispatch workers    ${C.cyan}[R]${C.reset} Dispatch Review`);
+  console.log(`    ${C.cyan}[F]${C.reset} Dispatch Refine                 ${C.cyan}[C]${C.reset} Dispatch Compound`);
+  console.log(`    ${C.cyan}[G]${C.reset} Push & create PR                ${C.cyan}[K]${C.reset} Manual commit checkpoint`);
+  console.log(`    ${C.cyan}[S]${C.reset} Refresh Status                  ${C.cyan}[N]${C.reset} New Feature (clear)`);
+  console.log(`    ${C.cyan}[Q]${C.reset} Quit`);
+  console.log();
+  console.log(`  ${C.dim}Windows: Ctrl+b then 1=Orch 2=Plan 3=Back 4=Front 5=Tests 6=Review 7=Status${C.reset}`);
+}
+
+function render(state: WorkflowState): void {
+  clearScreen();
+  renderHeader();
+  renderGitInfo(state.branchName, state.commitCount);
+  renderPhase(state.phase, state.iteration);
+  renderSignals(state.signals);
+  renderFiles();
+  renderNextAction(state.phase, state.signals);
+  renderMenu();
+}
+
+// ============================================================================
+// Main Loop
+// ============================================================================
+
+async function main(): Promise<void> {
+  // Check if we're in a workflow directory
+  if (!fileExists(WORKFLOW_DIR)) {
+    console.log(`${C.red}Error: No .workflow/ directory found.${C.reset}`);
+    console.log(`Run this from your project directory after starting ce-dev.`);
+    process.exit(1);
+  }
+
+  // Set up terminal
+  hideCursor();
+  process.on("exit", showCursor);
+  process.on("SIGINT", () => {
+    showCursor();
+    console.log("\n");
+    process.exit(0);
   });
 
-  // Also watch state file
-  watch(workflowPath(), (eventType, filename) => {
-    if (filename === STATE_FILE) {
-      const status = getStatus();
-      logState(status.state);
+  // Set up keyboard input
+  readline.emitKeypressEvents(process.stdin);
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+  }
+
+  // Initial state
+  let signals = getSignals();
+  let phase = determinePhase(signals);
+  let iteration = 1;
+  let featureName: string | undefined = getFeatureNameFromPlan();
+  let branchName: string | undefined = getCurrentBranch();
+  let commitCount = getCommitCount();
+  let state: WorkflowState = { phase, iteration, signals, featureName, branchName, commitCount };
+
+  // Initial render and sync
+  render(state);
+  syncStateToFile(state);
+
+  // Watch for signal changes
+  const signalsDir = workflowPath(SIGNALS_DIR);
+  if (!fileExists(signalsDir)) {
+    mkdirSync(signalsDir, { recursive: true });
+  }
+
+  // Track previous phase for auto-commit on transitions
+  let prevPhase = phase;
+  let implementationCommitted = false;
+  let refineCommitted = false;
+
+  const watcher = watch(signalsDir, () => {
+    const prevPhaseVal = phase;
+    signals = getSignals();
+    phase = determinePhase(signals);
+
+    // Auto-commit when implementation completes (transition to reviewing)
+    if (prevPhaseVal === "implementing" && phase === "reviewing" && !implementationCommitted) {
+      implementationCommitted = true;
+      console.log(`\n${C.cyan}Implementation complete - committing changes...${C.reset}`);
+      const implCommit = commitPhase("feat", featureName || "CE workflow feature");
+      if (implCommit.success) {
+        commitCount = getCommitCount();
+        console.log(`  ${C.green}✓${C.reset} Committed: feat: ${featureName}`);
+      } else if (implCommit.error) {
+        console.log(`  ${C.yellow}⚠${C.reset} ${implCommit.error}`);
+      }
+    }
+
+    // Auto-commit when refine completes (all refine signals done, before re-review)
+    const allRefinesDone = signals["backend-refine"] && signals["frontend-refine"] && signals["tests-refine"];
+    if (allRefinesDone && !refineCommitted && prevPhaseVal === "refining") {
+      refineCommitted = true;
+      console.log(`\n${C.cyan}Refine complete - committing fixes...${C.reset}`);
+      const refineCommit = commitPhase("fix", `review feedback for ${featureName || "CE workflow"}`);
+      if (refineCommit.success) {
+        commitCount = getCommitCount();
+        console.log(`  ${C.green}✓${C.reset} Committed: fix: review feedback`);
+      } else if (refineCommit.error) {
+        console.log(`  ${C.yellow}⚠${C.reset} ${refineCommit.error}`);
+      }
+    }
+
+    // Reset refine commit flag when starting a new refine cycle
+    if (phase === "refining" && !allRefinesDone) {
+      refineCommitted = false;
+    }
+
+    state = { phase, iteration, signals, featureName, branchName, commitCount };
+    render(state);
+    syncStateToFile(state);
+  });
+
+  // Handle keyboard input
+  process.stdin.on("keypress", (str, key) => {
+    if (key.ctrl && key.name === "c") {
+      showCursor();
+      console.log("\n");
+      process.exit(0);
+    }
+
+    const char = str?.toLowerCase();
+
+    switch (char) {
+      case "p":
+        // Plan done - create branch, commit plan, dispatch implementation workers
+        if (fileExists(workflowPath("PLAN.md"))) {
+          // Get feature name from plan
+          const planFeatureName = getFeatureNameFromPlan();
+          featureName = planFeatureName;
+
+          // Create feature branch
+          console.log(`\n${C.cyan}Creating feature branch...${C.reset}`);
+          const branchResult = createFeatureBranch(planFeatureName);
+          if (!branchResult.success) {
+            console.log(`\n${C.red}✗ Failed to create branch: ${branchResult.error}${C.reset}`);
+            setTimeout(() => render(state), 2000);
+            break;
+          }
+          branchName = branchResult.branch;
+          console.log(`  ${C.green}✓${C.reset} Branch: ${branchName}`);
+
+          // Commit planning docs
+          console.log(`  ${C.dim}Committing plan...${C.reset}`);
+          const planCommit = commitPhase("docs", planFeatureName, "plan");
+          if (planCommit.success) {
+            commitCount = getCommitCount();
+            console.log(`  ${C.green}✓${C.reset} Committed: docs(plan): ${planFeatureName}`);
+          }
+
+          // Dispatch workers
+          console.log(`\n${C.cyan}Dispatching implementation workers...${C.reset}`);
+          execSync(`touch ${workflowPath("signals/plan.done")}`);
+          dispatchWorker("backend", WINDOWS.backend);
+          setTimeout(() => dispatchWorker("frontend", WINDOWS.frontend), 300);
+          setTimeout(() => dispatchWorker("tests", WINDOWS.tests), 600);
+          setTimeout(() => {
+            signals = getSignals();
+            phase = determinePhase(signals);
+            commitCount = getCommitCount();
+            state = { phase, iteration, signals, featureName, branchName, commitCount };
+            render(state);
+            syncStateToFile(state);
+          }, 1000);
+        }
+        break;
+
+      case "r":
+        // Dispatch review
+        console.log(`\n${C.cyan}Dispatching review...${C.reset}`);
+        dispatchReview();
+        setTimeout(() => {
+          signals = getSignals();
+          phase = determinePhase(signals);
+          state = { phase, iteration, signals };
+          render(state);
+          syncStateToFile(state);
+        }, 500);
+        break;
+
+      case "f":
+        // Dispatch refine
+        console.log(`\n${C.cyan}Dispatching refine workers...${C.reset}`);
+        iteration++;
+        dispatchWorker("backend", WINDOWS.backend, true);
+        setTimeout(() => dispatchWorker("frontend", WINDOWS.frontend, true), 300);
+        setTimeout(() => dispatchWorker("tests", WINDOWS.tests, true), 600);
+        setTimeout(() => {
+          signals = getSignals();
+          phase = determinePhase(signals);
+          state = { phase, iteration, signals };
+          render(state);
+          syncStateToFile(state);
+        }, 1000);
+        break;
+
+      case "c":
+        // Dispatch compound
+        const reviewStatus = getReviewStatus(signals);
+        if (reviewStatus === "PASS") {
+          console.log(`\n${C.cyan}Dispatching compound...${C.reset}`);
+          dispatchCompound();
+          setTimeout(() => {
+            signals = getSignals();
+            phase = determinePhase(signals);
+            state = { phase, iteration, signals };
+            render(state);
+            syncStateToFile(state);
+          }, 500);
+        } else {
+          console.log(`\n${C.red}Cannot compound - review has not passed${C.reset}`);
+          setTimeout(() => render(state), 1500);
+        }
+        break;
+
+      case "s":
+        // Refresh status
+        signals = getSignals();
+        phase = determinePhase(signals);
+        commitCount = getCommitCount();
+        state = { phase, iteration, signals, featureName, branchName, commitCount };
+        render(state);
+        syncStateToFile(state);
+        break;
+
+      case "k":
+        // Manual commit checkpoint
+        if (phase === "init") {
+          console.log(`\n${C.yellow}Nothing to commit yet - start planning first${C.reset}`);
+          setTimeout(() => render(state), 1500);
+          break;
+        }
+        const commitType = phase === "planning" ? "docs" :
+                          phase === "implementing" ? "feat" :
+                          phase === "refining" ? "fix" : "chore";
+        const manualCommit = commitPhase(commitType, featureName || "CE workflow checkpoint");
+        if (manualCommit.success) {
+          commitCount = getCommitCount();
+          state = { phase, iteration, signals, featureName, branchName, commitCount };
+          console.log(`\n${C.green}✓ Committed: ${commitType}: ${featureName || "checkpoint"}${C.reset}`);
+        } else {
+          console.log(`\n${C.yellow}⚠ Nothing to commit (no changes)${C.reset}`);
+        }
+        setTimeout(() => render(state), 1500);
+        break;
+
+      case "g":
+        // Git commit and create PR
+        if (signals.compound) {
+          console.log(`\n${C.cyan}Creating PR...${C.reset}`);
+          const result = gitCommitAndPR(featureName);
+          if (result.success) {
+            console.log(`\n${C.green}✓ PR created: ${result.prUrl}${C.reset}`);
+            // Update phase to complete
+            phase = "complete";
+            commitCount = getCommitCount();
+            state = { phase, iteration, signals, featureName, branchName, commitCount };
+            setTimeout(() => {
+              render(state);
+              syncStateToFile(state);
+            }, 2000);
+          } else {
+            console.log(`\n${C.red}✗ Failed: ${result.error}${C.reset}`);
+            setTimeout(() => render(state), 2000);
+          }
+        } else {
+          console.log(`\n${C.red}Cannot create PR - compound not complete${C.reset}`);
+          setTimeout(() => render(state), 1500);
+        }
+        break;
+
+      case "n":
+        // New feature - clear workflow
+        console.log(`\n${C.yellow}Clear workflow and start new feature? [y/N]${C.reset}`);
+        process.stdin.once("keypress", (confirmStr) => {
+          if (confirmStr?.toLowerCase() === "y") {
+            console.log(`\n${C.cyan}Clearing workflow...${C.reset}`);
+            clearWorkflow();
+            signals = {};
+            phase = "init";
+            iteration = 1;
+            featureName = undefined;
+            branchName = getCurrentBranch();
+            commitCount = 0;
+            implementationCommitted = false;
+            refineCommitted = false;
+            state = { phase, iteration, signals, featureName, branchName, commitCount };
+            setTimeout(() => {
+              render(state);
+              console.log(`\n${C.green}✓ Workflow cleared. Go to Plan window (Ctrl+b 2) to start.${C.reset}`);
+            }, 500);
+          } else {
+            console.log(`\n${C.dim}Cancelled${C.reset}`);
+            setTimeout(() => render(state), 500);
+          }
+        });
+        break;
+
+      case "q":
+        // Quit
+        showCursor();
+        watcher.close();
+        console.log("\n");
+        process.exit(0);
+        break;
     }
   });
 
   // Keep process alive
-  setInterval(() => {}, 1000);
-}
-
-function cmdSignal(name: string, force: boolean = false): void {
-  if (!fileExists(workflowPath())) {
-    logError("No workflow found. Run: orchestrate.ts init");
-    return;
-  }
-
-  if (force) {
-    logInfo(`Force signaling: ${name}`);
-  }
-
-  signalComplete(name);
-
-  // If signaling review with force, also mark it as PASS
-  if (name === "review" && force) {
-    const reviewPath = workflowPath("REVIEW.md");
-    if (fileExists(reviewPath)) {
-      let content = readFileSync(reviewPath, "utf-8");
-      content = content.replace(/Status: FAIL/g, "Status: PASS (forced)");
-      writeFileSync(reviewPath, content);
-      logInfo("Review status forced to PASS");
-    }
-  }
-}
-
-function cmdReset(): void {
-  if (!fileExists(workflowPath())) {
-    logError("No workflow found.");
-    return;
-  }
-
-  log("Resetting workflow state...", "yellow");
-
-  // Clear signals
-  clearSignals(["*"]);
-
-  // Reset state
-  updateStatus({
-    state: "init",
-    iteration: 0,
-    errors: [],
-  });
-
-  logSuccess("Workflow reset to init state");
-  log("Artifacts (PLAN.md, contracts/, tasks/) preserved", "dim");
-}
-
-function cmdClean(): void {
-  if (!fileExists(workflowPath())) {
-    logError("No workflow found.");
-    return;
-  }
-
-  log("Removing .workflow/ directory...", "yellow");
-  execSync(`rm -rf "${workflowPath()}"`);
-  logSuccess("Workflow directory removed");
-}
-
-function cmdTmux(): void {
-  setupTmuxWorkspace();
-}
-
-async function cmdStart(): Promise<void> {
-  if (!fileExists(workflowPath())) {
-    logError("No workflow found. Run: orchestrate.ts init");
-    return;
-  }
-
-  await runStateMachine();
-}
-
-// ============================================================================
-// CLI
-// ============================================================================
-
-function printHelp(): void {
-  console.log(`
-${COLORS.bright}orchestrate.ts${COLORS.reset} - Parallel Claude Code workflow coordinator
-
-${COLORS.bright}USAGE${COLORS.reset}
-  orchestrate.ts <command> [options]
-
-${COLORS.bright}COMMANDS${COLORS.reset}
-  init              Create .workflow/ directory structure
-  start             Start the state machine (foreground)
-  status            Show current workflow state
-  watch             Watch for state changes (live updates)
-  tmux              Set up tmux session with all windows
-  signal <name>     Manually signal completion (e.g., signal plan)
-  reset             Reset to init state (preserves artifacts)
-  clean             Remove .workflow/ entirely
-
-${COLORS.bright}OPTIONS${COLORS.reset}
-  --force           Force signal even if conditions not met
-  --help, -h        Show this help message
-
-${COLORS.bright}EXAMPLES${COLORS.reset}
-  orchestrate.ts init                  # Initialize workflow
-  orchestrate.ts tmux                  # Set up tmux workspace
-  orchestrate.ts start                 # Start orchestrator
-  orchestrate.ts status                # Check progress
-  orchestrate.ts signal plan           # Manually signal plan done
-  orchestrate.ts signal review --force # Force review to pass
-
-${COLORS.bright}WORKFLOW${COLORS.reset}
-  1. orchestrate.ts init
-  2. orchestrate.ts tmux
-  3. orchestrate.ts start (in orchestrate window)
-  4. Plan your feature in the plan window
-  5. Watch parallel workers implement
-  6. Review and refine automatically
-  7. Learnings captured to History/
-`);
-}
-
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const command = args[0];
-  const force = args.includes("--force");
-
-  if (!command || command === "--help" || command === "-h") {
-    printHelp();
-    return;
-  }
-
-  switch (command) {
-    case "init":
-      cmdInit();
-      break;
-    case "start":
-      await cmdStart();
-      break;
-    case "status":
-      cmdStatus();
-      break;
-    case "watch":
-      cmdWatch();
-      break;
-    case "tmux":
-      cmdTmux();
-      break;
-    case "signal":
-      const signalName = args[1];
-      if (!signalName) {
-        logError("Signal name required. Example: orchestrate.ts signal plan");
-        return;
-      }
-      cmdSignal(signalName, force);
-      break;
-    case "reset":
-      cmdReset();
-      break;
-    case "clean":
-      cmdClean();
-      break;
-    default:
-      logError(`Unknown command: ${command}`);
-      printHelp();
-  }
+  await new Promise(() => {});
 }
 
 main().catch((e) => {
-  logError(`Fatal: ${e.message}`);
+  showCursor();
+  console.error(`${C.red}Fatal: ${e.message}${C.reset}`);
   process.exit(1);
 });
