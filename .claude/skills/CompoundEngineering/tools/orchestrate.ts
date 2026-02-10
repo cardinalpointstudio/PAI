@@ -430,10 +430,10 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>`;
       return { success: false, error: "No commits to create PR from" };
     }
 
-    // Push to remote
-    execSync(`git push -u origin ${branch}`, { stdio: "ignore" });
+    // Push to remote (with timeout)
+    execSync(`git push -u origin ${branch}`, { stdio: "ignore", timeout: 60000 });
 
-    // Create PR with richer description
+    // Create PR with richer description - use temp file for reliable body
     const prBody = `## Summary
 Implemented **${name}** using Compound Engineering workflow.
 
@@ -445,15 +445,18 @@ This PR contains ${commitCount} commit(s) from the CE workflow:
 
 ## Test plan
 - [ ] Manual testing completed
-- [ ] Type checking passes (\`bun run tsc --noEmit\`)
-- [ ] All tests pass (\`bun test\`)
+- [ ] Type checking passes (bun run tsc --noEmit)
+- [ ] All tests pass (bun test)
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
 
+    const prBodyFile = "/tmp/ce-pr-body.txt";
+    writeFileSync(prBodyFile, prBody);
     const prOutput = execSync(
-      `gh pr create --title "feat: ${name}" --body "${prBody.replace(/"/g, '\\"')}"`,
-      { encoding: "utf-8" }
+      `gh pr create --title "feat: ${name}" --body-file ${prBodyFile}`,
+      { encoding: "utf-8", timeout: 60000 }
     ).trim();
+    unlinkSync(prBodyFile);
 
     // Extract PR URL from output
     const urlMatch = prOutput.match(/https:\/\/github\.com\/[^\s]+/);
