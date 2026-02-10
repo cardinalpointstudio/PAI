@@ -713,15 +713,132 @@ function render(state: WorkflowState): void {
 }
 
 // ============================================================================
+// Watch-Only Mode (for Status window)
+// ============================================================================
+
+function renderWatchMode(state: WorkflowState): void {
+  console.clear();
+
+  const { phase, iteration, signals, featureName, branchName, commitCount } = state;
+
+  // Header
+  console.log(`${C.cyan}╭${"─".repeat(50)}╮${C.reset}`);
+  console.log(`${C.cyan}│${C.reset}  ${C.yellow}⚡ STATUS MONITOR${C.reset}${" ".repeat(32)}${C.cyan}│${C.reset}`);
+  console.log(`${C.cyan}├${"─".repeat(50)}┤${C.reset}`);
+
+  // Branch info
+  if (branchName) {
+    console.log(`${C.cyan}│${C.reset}  Branch: ${C.green}${branchName.slice(0, 38)}${C.reset}${" ".repeat(Math.max(0, 40 - (branchName?.length || 0)))}${C.cyan}│${C.reset}`);
+  }
+  if (commitCount !== undefined && commitCount > 0) {
+    console.log(`${C.cyan}│${C.reset}  Commits: ${C.yellow}${commitCount}${C.reset}${" ".repeat(38)}${C.cyan}│${C.reset}`);
+  }
+  if (featureName) {
+    const truncated = featureName.slice(0, 36);
+    console.log(`${C.cyan}│${C.reset}  Feature: ${C.white}${truncated}${C.reset}${" ".repeat(Math.max(0, 39 - truncated.length))}${C.cyan}│${C.reset}`);
+  }
+  console.log(`${C.cyan}├${"─".repeat(50)}┤${C.reset}`);
+
+  // Phase
+  const phaseColors: Record<Phase, string> = {
+    init: C.dim,
+    planning: C.yellow,
+    implementing: C.blue,
+    reviewing: C.magenta,
+    refining: C.yellow,
+    compounding: C.cyan,
+    complete: C.green,
+  };
+  const phaseColor = phaseColors[phase] || C.white;
+  console.log(`${C.cyan}│${C.reset}  Phase: ${phaseColor}${phase.toUpperCase()}${C.reset}     Iteration: ${C.white}${iteration}/3${C.reset}${" ".repeat(16)}${C.cyan}│${C.reset}`);
+  console.log(`${C.cyan}├${"─".repeat(50)}┤${C.reset}`);
+
+  // Signals
+  console.log(`${C.cyan}│${C.reset}  Signals:${" ".repeat(40)}${C.cyan}│${C.reset}`);
+  const signalList = ["plan", "backend", "frontend", "tests", "review", "compound"];
+  for (const sig of signalList) {
+    const done = signals[sig] === true;
+    const icon = done ? `${C.green}●${C.reset}` : `${C.dim}○${C.reset}`;
+    const name = sig.padEnd(12);
+    console.log(`${C.cyan}│${C.reset}    ${icon} ${name}${" ".repeat(33)}${C.cyan}│${C.reset}`);
+  }
+
+  // Refine signals if any exist
+  const refineSignals = ["backend-refine", "frontend-refine", "tests-refine"];
+  const hasRefine = refineSignals.some(s => signals[s] !== undefined);
+  if (hasRefine) {
+    console.log(`${C.cyan}│${C.reset}  ${C.dim}── Refine ──${C.reset}${" ".repeat(36)}${C.cyan}│${C.reset}`);
+    for (const sig of refineSignals) {
+      const done = signals[sig] === true;
+      const icon = done ? `${C.green}●${C.reset}` : `${C.dim}○${C.reset}`;
+      const name = sig.replace("-refine", "").padEnd(12);
+      console.log(`${C.cyan}│${C.reset}    ${icon} ${name}${" ".repeat(33)}${C.cyan}│${C.reset}`);
+    }
+  }
+
+  console.log(`${C.cyan}╰${"─".repeat(50)}╯${C.reset}`);
+  console.log(`\n${C.dim}Auto-refreshes on signal changes. Ctrl+C to exit.${C.reset}`);
+}
+
+async function runWatchMode(): Promise<void> {
+  console.log(`${C.cyan}Starting status monitor...${C.reset}`);
+
+  // Set up terminal
+  process.on("SIGINT", () => {
+    console.log("\n");
+    process.exit(0);
+  });
+
+  // Initial state
+  let signals = getSignals();
+  let phase = determinePhase(signals);
+  let featureName = getFeatureNameFromPlan();
+  let branchName = getCurrentBranch();
+  let commitCount = getCommitCount();
+  let state: WorkflowState = { phase, iteration: 1, signals, featureName, branchName, commitCount };
+
+  // Initial render
+  renderWatchMode(state);
+
+  // Watch for signal changes
+  const signalsDir = workflowPath(SIGNALS_DIR);
+  if (!fileExists(signalsDir)) {
+    mkdirSync(signalsDir, { recursive: true });
+  }
+
+  watch(signalsDir, () => {
+    signals = getSignals();
+    phase = determinePhase(signals);
+    featureName = getFeatureNameFromPlan();
+    branchName = getCurrentBranch();
+    commitCount = getCommitCount();
+    state = { phase, iteration: 1, signals, featureName, branchName, commitCount };
+    renderWatchMode(state);
+  });
+
+  // Keep alive
+  await new Promise(() => {});
+}
+
+// ============================================================================
 // Main Loop
 // ============================================================================
 
 async function main(): Promise<void> {
+  // Check for watch-only mode (used by Status window)
+  const isWatchMode = process.argv.includes("watch");
+
   // Check if we're in a workflow directory
   if (!fileExists(WORKFLOW_DIR)) {
     console.log(`${C.red}Error: No .workflow/ directory found.${C.reset}`);
     console.log(`Run this from your project directory after starting ce-dev.`);
     process.exit(1);
+  }
+
+  // Watch-only mode: just display status, no key handling
+  if (isWatchMode) {
+    await runWatchMode();
+    return;
   }
 
   // Set up terminal
