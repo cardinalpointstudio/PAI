@@ -794,15 +794,17 @@ async function runWatchMode(): Promise<void> {
     process.exit(0);
   });
 
-  // Initial state
-  let signals = getSignals();
-  let phase = determinePhase(signals);
-  let featureName = getFeatureNameFromPlan();
-  let branchName = getCurrentBranch();
-  let commitCount = getCommitCount();
-  let state: WorkflowState = { phase, iteration: 1, signals, featureName, branchName, commitCount };
+  const refreshState = () => {
+    const signals = getSignals();
+    const phase = determinePhase(signals);
+    const featureName = getFeatureNameFromPlan();
+    const branchName = getCurrentBranch();
+    const commitCount = getCommitCount();
+    return { phase, iteration: 1, signals, featureName, branchName, commitCount };
+  };
 
-  // Initial render
+  // Initial state and render
+  let state: WorkflowState = refreshState();
   renderWatchMode(state);
 
   // Watch for signal changes
@@ -812,14 +814,26 @@ async function runWatchMode(): Promise<void> {
   }
 
   watch(signalsDir, () => {
-    signals = getSignals();
-    phase = determinePhase(signals);
-    featureName = getFeatureNameFromPlan();
-    branchName = getCurrentBranch();
-    commitCount = getCommitCount();
-    state = { phase, iteration: 1, signals, featureName, branchName, commitCount };
+    state = refreshState();
     renderWatchMode(state);
   });
+
+  // Also watch .workflow/ directory for state.json and other changes
+  const workflowDir = workflowPath();
+  watch(workflowDir, () => {
+    state = refreshState();
+    renderWatchMode(state);
+  });
+
+  // Periodic refresh every 3 seconds to catch branch/workflow changes
+  setInterval(() => {
+    const newState = refreshState();
+    // Only re-render if something changed
+    if (JSON.stringify(newState) !== JSON.stringify(state)) {
+      state = newState;
+      renderWatchMode(state);
+    }
+  }, 3000);
 
   // Keep alive
   await new Promise(() => {});
