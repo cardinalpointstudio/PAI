@@ -407,16 +407,16 @@ function gitCommitAndPR(featureName?: string): { success: boolean; prUrl?: strin
     const staged = execSync("git diff --cached --name-only", { encoding: "utf-8" }).trim();
 
     if (staged) {
-      // Commit any remaining changes using HEREDOC for multi-line message
-      const escapedName = name.replace(/'/g, "'\\''");
-      execSync(`git commit -m "$(cat <<'EOF'
-chore: final cleanup for ${escapedName}
+      // Commit any remaining changes - write message to temp file for reliability
+      const commitMessage = `chore: final cleanup for ${name}
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
-EOF
-)"`, { stdio: "ignore" });
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>`;
+      const tmpFile = "/tmp/ce-commit-msg.txt";
+      writeFileSync(tmpFile, commitMessage);
+      execSync(`git commit -F ${tmpFile}`, { stdio: "ignore" });
+      unlinkSync(tmpFile);
     }
 
     // Check if we have any commits to push
