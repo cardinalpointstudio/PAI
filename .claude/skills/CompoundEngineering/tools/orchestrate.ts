@@ -238,7 +238,7 @@ function getCurrentBranch(): string {
 }
 
 function determinePhase(signals: Record<string, boolean>): Phase {
-  if (signals.compound) return "complete";
+  if (signals.compound && signals.pr) return "complete";
 
   const reviewStatus = getReviewStatus(signals);
 
@@ -844,6 +844,10 @@ async function main(): Promise<void> {
 
           // Dispatch workers
           console.log(`\n${C.cyan}Dispatching implementation workers...${C.reset}`);
+          const signalsDirForPlan = workflowPath("signals");
+          if (!fileExists(signalsDirForPlan)) {
+            mkdirSync(signalsDirForPlan, { recursive: true });
+          }
           execSync(`touch ${workflowPath("signals/plan.done")}`);
           dispatchWorker("backend", WINDOWS.backend);
           setTimeout(() => dispatchWorker("frontend", WINDOWS.frontend), 300);
@@ -945,6 +949,8 @@ async function main(): Promise<void> {
           const result = gitCommitAndPR(featureName);
           if (result.success) {
             console.log(`\n${C.green}✓ PR created: ${result.prUrl}${C.reset}`);
+            // Signal that PR is created
+            execSync(`touch ${workflowPath("signals/pr.done")}`);
             // Update phase to complete
             phase = "complete";
             commitCount = getCommitCount();
