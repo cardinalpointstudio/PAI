@@ -333,7 +333,7 @@ function dispatchReview(): void {
 4. Review all changes in .workflow/ and src/
 5. Check for security, performance, correctness, maintainability
 
-IMPORTANT: If any of steps 1-3 fail, STATUS must be FAIL.
+IMPORTANT: If ANY check fails (automated or code review), STATUS must be FAIL.
 
 ## OUTPUT
 Create .workflow/REVIEW.md with:
