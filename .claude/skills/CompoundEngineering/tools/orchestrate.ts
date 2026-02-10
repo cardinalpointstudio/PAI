@@ -329,8 +329,11 @@ function dispatchReview(): void {
 ## YOUR TASK
 1. Run the test suite: bun test
 2. Run type checking: bun run tsc --noEmit
-3. Review all changes in .workflow/ and src/
-4. Check for security, performance, correctness, maintainability
+3. Run linting: bun run lint (or eslint . --ext .ts,.tsx)
+4. Review all changes in .workflow/ and src/
+5. Check for security, performance, correctness, maintainability
+
+IMPORTANT: If any of steps 1-3 fail, STATUS must be FAIL.
 
 ## OUTPUT
 Create .workflow/REVIEW.md with:
