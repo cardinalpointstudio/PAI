@@ -25,26 +25,25 @@ Run the full Plan → Implement → Review → Refine → Compound cycle with mu
 ## Architecture Overview
 
 ```
-Window 0: ORCHESTRATE (this runs the state machine)
+Window 1: ORCH (Orchestrator - command center, runs state machine)
 │
-├── Window 1: PLAN
+├── Window 2: PLAN
 │   └── Architect answers your questions, outputs plan artifacts
 │
-├── Window 2: IMPLEMENT (3 panes, parallel)
-│   ├── Backend worker
-│   ├── Frontend worker
-│   └── Tests worker
+├── Window 3: BACKEND
+│   └── Backend worker (src/backend/**, src/api/**, src/lib/**)
 │
-├── Window 3: REVIEW
+├── Window 4: FRONTEND
+│   └── Frontend worker (src/frontend/**, src/components/**)
+│
+├── Window 5: TESTS
+│   └── Tests worker (tests/**, *.test.ts)
+│
+├── Window 6: REVIEW
 │   └── Multi-agent review (security, performance, correctness, maintainability)
 │
-├── Window 4: REFINE (if review fails, 3 panes)
-│   ├── Backend fixes
-│   ├── Frontend fixes
-│   └── Test additions
-│
-└── Window 5: COMPOUND
-    └── Capture learnings for future work
+└── Window 7: STATUS
+    └── Live workflow status display (watch mode)
 ```
 
 ---
@@ -130,44 +129,50 @@ Window 0: ORCHESTRATE (this runs the state machine)
 
 ## Quick Start
 
-### 1. Initialize Workflow
+### 1. Start the Full Workflow
 
 ```bash
-# From your project root
-~/.claude/skills/CompoundEngineering/tools/orchestrate.ts init
+# From your project root - launches 7-window tmux session
+~/.claude/skills/CompoundEngineering/tools/compound-start.sh
 
-# Creates .workflow/ directory with initial state
+# This creates:
+#   - .workflow/ directory with initial state
+#   - 7 tmux windows with Claude launched in each
+#   - Orchestrator running in window 1
+#   - Status watch mode in window 7
 ```
 
-### 2. Start Orchestration
+### 2. Begin Planning (Window 2)
 
 ```bash
-# Terminal 1: Run the orchestrator (watches state, coordinates phases)
-~/.claude/skills/CompoundEngineering/tools/orchestrate.ts start
-
-# Or use the tmux setup script
-~/.claude/skills/CompoundEngineering/tools/orchestrate.ts tmux
+# Switch to Plan window: Ctrl+b 2
+# Describe your feature to the Architect
+# Answer clarifying questions
+# Approve the plan when ready
 ```
 
-### 3. Begin Planning
+### 3. Approve Plan (Window 1)
 
 ```bash
-# In PLAN window (or orchestrator spawns it)
-claude "Plan feature: [YOUR FEATURE DESCRIPTION]
-
-Use the CompoundEngineering Plan workflow.
-Output to .workflow/PLAN.md, .workflow/contracts/, .workflow/tasks/
-When done: touch .workflow/signals/plan.done"
+# Switch to Orch window: Ctrl+b 1
+# Press [P] to signal plan approved
+# Workers auto-start in windows 3-5
 ```
 
-### 4. Monitor Progress
+### 4. Monitor Progress (Window 7)
 
 ```bash
-# Check current state
-~/.claude/skills/CompoundEngineering/tools/orchestrate.ts status
-
-# Watch state changes
+# Switch to Status window: Ctrl+b 7
+# Live workflow status display
+# Or run manually:
 ~/.claude/skills/CompoundEngineering/tools/orchestrate.ts watch
+```
+
+### 5. Stop the Session
+
+```bash
+# Gracefully terminate all windows
+~/.claude/skills/CompoundEngineering/tools/ce-stop.sh
 ```
 
 ---
@@ -175,22 +180,20 @@ When done: touch .workflow/signals/plan.done"
 ## CLI Reference
 
 ```bash
-orchestrate.ts <command> [options]
+# Main orchestrator (interactive TUI with state machine)
+orchestrate.ts              # Run interactive orchestrator
+orchestrate.ts watch        # Watch-only mode (for Status window)
+orchestrate.ts init         # Create .workflow/ directory structure
+orchestrate.ts reset        # Reset workflow state for new session
 
-Commands:
-  init              Create .workflow/ directory structure
-  start             Start the state machine (foreground)
-  status            Show current workflow state
-  watch             Watch for state changes (live updates)
-  tmux              Set up tmux session with all windows
-  signal <name>     Manually signal completion (e.g., signal plan)
-  reset             Reset to init state (preserves artifacts)
-  clean             Remove .workflow/ entirely
+# Session management
+compound-start.sh           # Launch 7-window tmux session (ce-dev)
+ce-stop.sh                  # Gracefully terminate session
 
-Options:
-  --max-iterations  Max refine cycles before escalating (default: 3)
-  --workers         Worker types: backend,frontend,tests (default: all)
-  --project         Project root directory (default: cwd)
+# Navigation (inside tmux session)
+Ctrl+b 1-7                  # Switch between windows
+Ctrl+b d                    # Detach from session
+tmux attach -t ce-dev       # Re-attach to session
 ```
 
 ---
@@ -462,36 +465,33 @@ The Orchestrate workflow is the **coordinator** - it calls the existing workflow
 ## Example: Full Feature Run
 
 ```bash
-# 1. Initialize
+# 1. Start the session (from your project root)
 cd ~/my-project
-~/.claude/skills/CompoundEngineering/tools/orchestrate.ts init
+~/.claude/skills/CompoundEngineering/tools/compound-start.sh
 
-# 2. Start orchestrator in background
-~/.claude/skills/CompoundEngineering/tools/orchestrate.ts start &
-
-# 3. Open PLAN window and start planning
-claude "Plan: Add user profile editing with avatar upload"
+# 2. In Plan window (Ctrl+b 2): describe your feature
+"Add user profile editing with avatar upload"
 
 # ... answer clarifying questions ...
 # ... approve plan ...
 
-# 4. Watch parallel implementation
-orchestrate.ts watch
+# 3. In Orch window (Ctrl+b 1): press [P] to approve plan
+
+# 4. Watch parallel implementation (Ctrl+b 7 for Status window)
 # Backend: implementing... (45s)
 # Frontend: implementing... (52s)
 # Tests: implementing... (38s)
 # All workers complete!
 
-# 5. Review runs automatically
+# 5. Review runs automatically in Review window (Ctrl+b 6)
 # Review: NEEDS_FIXES (2 critical issues)
 
-# 6. Refine runs automatically
-# Refine iteration 1...
+# 6. Refine phase runs automatically
 # Review: PASS
 
-# 7. Compound runs automatically
-# Learnings saved to History/Learnings/2026-01-28-user-profile.md
+# 7. Compound phase captures learnings
+# Learnings saved to History/Learnings/
 
-# 8. Done!
-echo "Feature complete. Commit when ready."
+# 8. Done! Stop session when ready
+~/.claude/skills/CompoundEngineering/tools/ce-stop.sh
 ```

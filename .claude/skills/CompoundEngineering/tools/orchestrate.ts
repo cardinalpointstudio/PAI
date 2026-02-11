@@ -430,10 +430,10 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>`;
       return { success: false, error: "No commits to create PR from" };
     }
 
-    // Push to remote (with timeout)
-    execSync(`git push -u origin ${branch}`, { stdio: "ignore", timeout: 60000 });
+    // Push to remote
+    execSync(`git push -u origin ${branch}`, { stdio: "ignore" });
 
-    // Create PR with richer description - use temp file for reliable body
+    // Create PR with richer description
     const prBody = `## Summary
 Implemented **${name}** using Compound Engineering workflow.
 
@@ -445,18 +445,15 @@ This PR contains ${commitCount} commit(s) from the CE workflow:
 
 ## Test plan
 - [ ] Manual testing completed
-- [ ] Type checking passes (bun run tsc --noEmit)
-- [ ] All tests pass (bun test)
+- [ ] Type checking passes (\`bun run tsc --noEmit\`)
+- [ ] All tests pass (\`bun test\`)
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)`;
 
-    const prBodyFile = "/tmp/ce-pr-body.txt";
-    writeFileSync(prBodyFile, prBody);
     const prOutput = execSync(
-      `gh pr create --title "feat: ${name}" --body-file ${prBodyFile}`,
-      { encoding: "utf-8", timeout: 60000 }
+      `gh pr create --title "feat: ${name}" --body "${prBody.replace(/"/g, '\\"')}"`,
+      { encoding: "utf-8" }
     ).trim();
-    unlinkSync(prBodyFile);
 
     // Extract PR URL from output
     const urlMatch = prOutput.match(/https:\/\/github\.com\/[^\s]+/);
@@ -847,6 +844,50 @@ async function runWatchMode(): Promise<void> {
 // ============================================================================
 
 async function main(): Promise<void> {
+  // Handle commands before interactive mode
+  const command = process.argv[2];
+
+  // Init command: Create .workflow directory structure
+  if (command === "init") {
+    const workflowDir = workflowPath();
+    const signalsDir = workflowPath(SIGNALS_DIR);
+
+    if (!fileExists(workflowDir)) {
+      mkdirSync(workflowDir, { recursive: true });
+      console.log(`${C.green}✓ Created .workflow/ directory${C.reset}`);
+    }
+
+    if (!fileExists(signalsDir)) {
+      mkdirSync(signalsDir, { recursive: true });
+      console.log(`${C.green}✓ Created signals/ directory${C.reset}`);
+    }
+
+    // Create initial state file
+    const initialState: WorkflowState = {
+      phase: "init",
+      iteration: 1,
+      signals: {},
+    };
+    syncStateToFile(initialState);
+    console.log(`${C.green}✓ Initialized workflow state${C.reset}`);
+    process.exit(0);
+  }
+
+  // Reset command: Clear signals and state for new session
+  if (command === "reset") {
+    clearWorkflow();
+
+    // Recreate initial state
+    const initialState: WorkflowState = {
+      phase: "init",
+      iteration: 1,
+      signals: {},
+    };
+    syncStateToFile(initialState);
+    console.log(`${C.green}✓ Reset workflow state${C.reset}`);
+    process.exit(0);
+  }
+
   // Check for watch-only mode (used by Status window)
   const isWatchMode = process.argv.includes("watch");
 
