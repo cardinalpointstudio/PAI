@@ -146,19 +146,61 @@ function getReviewStatus(signals: Record<string, boolean>): "PASS" | "FAIL" | "P
 // Git & Commit Functions
 // ============================================================================
 
+function branchToFeatureName(branch: string): string {
+  // Convert branch name to readable feature name
+  // e.g., "calendar-plan" → "Calendar Plan"
+  // e.g., "compound/20260217-bulk-member-import" → "Bulk Member Import"
+
+  // Strip common prefixes
+  let name = branch
+    .replace(/^compound\/\d{8}-/, "")  // Remove compound/YYYYMMDD- prefix
+    .replace(/^feature\//, "")
+    .replace(/^feat\//, "");
+
+  // Convert kebab-case/snake_case to Title Case
+  return name
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function planMatchesBranch(planFeatureName: string, branch: string): boolean {
+  // Check if the plan's feature name seems to match the current branch
+  // Generate what the branch slug would be from the plan name
+  const expectedSlug = generateSlug(planFeatureName);
+
+  // Check if branch contains the expected slug or vice versa
+  const branchLower = branch.toLowerCase();
+  return branchLower.includes(expectedSlug) ||
+         expectedSlug.includes(branchLower.replace(/^compound\/\d{8}-/, ""));
+}
+
 function getFeatureNameFromPlan(): string {
   const planPath = workflowPath("PLAN.md");
+  const currentBranch = getCurrentBranch();
+
   if (fileExists(planPath)) {
     try {
       const planContent = readFileSync(planPath, "utf-8");
       const titleMatch = planContent.match(/^#\s+(.+)$/m);
       if (titleMatch) {
-        return titleMatch[1];
+        const planFeatureName = titleMatch[1];
+
+        // Check if this plan matches the current branch
+        if (planMatchesBranch(planFeatureName, currentBranch)) {
+          return planFeatureName;
+        }
+        // Plan doesn't match branch - derive from branch name instead
       }
     } catch {
       // Ignore read errors
     }
   }
+
+  // No matching plan - derive feature name from branch
+  if (currentBranch && currentBranch !== "main" && currentBranch !== "master") {
+    return branchToFeatureName(currentBranch);
+  }
+
   return "CE workflow feature";
 }
 
