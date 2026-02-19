@@ -1,0 +1,5 @@
+#!/bin/sh
+
+# Run linting and type checking before commit
+bun run lint
+bun run typecheck
