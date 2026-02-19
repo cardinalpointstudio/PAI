@@ -1,6 +1,8 @@
-# PAI CompoundEngineering Skill v1.0.0 - Installation Guide
+# PAI CompoundEngineering Skill v1.1.0 - Installation Guide
 
 **This guide is designed for AI agents installing this pack into a user's infrastructure.**
+
+**Agent-Agnostic:** This skill works with any AI coding CLI (Claude Code, aider, opencode, etc.)
 
 ---
 
@@ -17,7 +19,9 @@
 
 Before starting, greet the user:
 ```
-"I'm installing PAI CompoundEngineering Skill v1.0.0 - Systematic parallel development workflow. This skill helps you plan, implement with parallel agents, review, and capture learnings.
+"I'm installing PAI CompoundEngineering Skill v1.1.0 - Systematic parallel development workflow. This skill helps you plan, implement with parallel AI agents, review, and capture learnings.
+
+This skill is agent-agnostic - it works with Claude Code, aider, opencode, or any other AI coding CLI.
 
 Let me analyze your system and guide you through installation."
 ```
@@ -118,12 +122,42 @@ If user chooses "Show install commands":
 curl -fsSL https://bun.sh/install | bash
 ```
 
-### Question 3: Final Confirmation
+### Question 3: AI CLI Selection
+
+**Ask which AI coding CLI the user wants to use:**
+
+```json
+{
+  "header": "AI CLI",
+  "question": "Which AI coding CLI do you want to use for the Orchestrate workflow?",
+  "multiSelect": false,
+  "options": [
+    {"label": "Claude Code (Recommended)", "description": "claude --dangerously-skip-permissions"},
+    {"label": "aider", "description": "Works with GPT-4, Claude, Ollama, local models"},
+    {"label": "opencode", "description": "Open source, multiple providers"},
+    {"label": "Other", "description": "I'll configure AI_CLI manually"}
+  ]
+}
+```
+
+Based on selection, inform user to add to their shell profile:
+```bash
+# Claude Code (default - no configuration needed)
+export AI_CLI="claude --dangerously-skip-permissions"
+
+# aider
+export AI_CLI="aider --yes-always"
+
+# opencode
+export AI_CLI="opencode"
+```
+
+### Question 4: Final Confirmation
 
 ```json
 {
   "header": "Install",
-  "question": "Ready to install PAI CompoundEngineering Skill v1.0.0?",
+  "question": "Ready to install PAI CompoundEngineering Skill v1.1.0?",
   "multiSelect": false,
   "options": [
     {"label": "Yes, install now (Recommended)", "description": "Proceeds with installation"},
@@ -331,13 +365,25 @@ echo "=== Verification Complete ==="
 ### On Success
 
 ```
-"PAI CompoundEngineering Skill v1.0.0 installed successfully!
+"PAI CompoundEngineering Skill v1.1.0 installed successfully!
 
 What's available:
 - Plan: Design implementation before coding
 - Review: Multi-agent parallel code review
 - Compound: Capture learnings for future work
-- Orchestrate: Full parallel workflow with tmux
+- Orchestrate: Full parallel workflow with tmux (agent-agnostic)
+
+Agent Configuration:
+The Orchestrate workflow uses the AI_CLI environment variable.
+Default: Claude Code. To use a different AI CLI:
+
+  # For aider
+  export AI_CLI='aider --yes-always'
+
+  # For opencode
+  export AI_CLI='opencode'
+
+Add to ~/.bashrc or ~/.zshrc for persistence.
 
 Usage:
 - 'Plan the implementation of [feature]' - Create detailed plan

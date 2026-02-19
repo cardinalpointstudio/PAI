@@ -2,7 +2,8 @@
 
 /**
  * Compound Engineering Orchestrator
- * Interactive command center for managing parallel Claude Code workflows
+ * Interactive command center for managing parallel AI coding agent workflows
+ * Agent-agnostic: Works with any AI CLI (Claude Code, aider, opencode, etc.)
  */
 
 import { existsSync, readdirSync, readFileSync, writeFileSync, watch, mkdirSync, rmSync, unlinkSync, renameSync } from "fs";
@@ -557,18 +558,19 @@ function clearWorkflow(): void {
   };
   writeFileSync(stateFile, JSON.stringify(initialState, null, 2));
 
-  // Clear Claude sessions in worker windows (2-6: Plan, Backend, Frontend, Tests, Review)
-  // Send /clear command to each Claude Code session
+  // Clear AI agent sessions in worker windows (2-6: Plan, Backend, Frontend, Tests, Review)
+  // Note: /clear is Claude Code specific. Other agents may need different commands.
+  // For aider: /clear works. For others, Ctrl+C may be sufficient.
   const workerWindows = [2, 3, 4, 5, 6]; // Plan, Backend, Frontend, Tests, Review
   for (const windowNum of workerWindows) {
     try {
       // Cancel any pending input first
       execSync(`tmux send-keys -t ${SESSION_NAME}:${windowNum} C-c`, { stdio: "ignore" });
-      // Send /clear then Enter (select autocomplete) then Enter again (submit)
+      // Try /clear command (works for Claude Code and aider)
       execSync(`tmux send-keys -t ${SESSION_NAME}:${windowNum} '/clear' Enter`, { stdio: "ignore" });
       execSync(`sleep 0.2 && tmux send-keys -t ${SESSION_NAME}:${windowNum} Enter`, { stdio: "ignore" });
     } catch {
-      // Window might not exist or Claude not running - ignore
+      // Window might not exist or agent not running - ignore
     }
   }
 }

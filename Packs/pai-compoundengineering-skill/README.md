@@ -1,14 +1,15 @@
 ---
 name: PAI CompoundEngineering Skill
-pack-id: pai-compoundengineering-skill-v1.0.0
-version: 1.0.0
+pack-id: pai-compoundengineering-skill-v1.1.0
+version: 1.1.0
 author: salexanderb
 description: Systematic development workflow with parallel multi-agent implementation, code review, and learning capture. Plan -> Implement -> Review -> Compound -> Repeat.
 type: skill
 purpose-type: [workflow, multi-agent, code-review, learning]
-platform: claude-code
+platform: any
+agent-agnostic: true
 dependencies: [tmux, gh]
-keywords: [compound, engineering, workflow, parallel, agents, review, planning, tmux]
+keywords: [compound, engineering, workflow, parallel, agents, review, planning, tmux, aider, opencode]
 ---
 
 # PAI CompoundEngineering Skill
@@ -65,7 +66,7 @@ CompoundEngineering Skill
 | **Plan** | "plan feature", "design implementation" | Create implementation plan before coding |
 | **Review** | "review code", "review PR" | Multi-agent parallel code review |
 | **Compound** | "capture learnings", "document patterns" | Extract and preserve learnings |
-| **Orchestrate** | "parallel workers", "tmux workflow" | Coordinate multi-Claude implementation |
+| **Orchestrate** | "parallel workers", "tmux workflow" | Coordinate parallel AI agent implementation |
 
 ## Orchestrate Workflow: 7-Window Layout
 
@@ -149,6 +150,46 @@ compound-start.sh /path/to/project
 - **gh** - GitHub CLI for PR creation
 - **bun** - Runtime for orchestrator tool
 
+## Agent Configuration
+
+The Orchestrate workflow is **agent-agnostic**. Configure your preferred AI coding CLI via the `AI_CLI` environment variable:
+
+```bash
+# Claude Code (default)
+export AI_CLI="claude --dangerously-skip-permissions"
+
+# Aider (works with GPT-4, Claude, local models)
+export AI_CLI="aider --yes-always"
+
+# OpenCode
+export AI_CLI="opencode"
+
+# Codex CLI
+export AI_CLI="codex --auto-edit"
+
+# Any other CLI that accepts prompts
+export AI_CLI="your-ai-cli --auto-accept-flag"
+```
+
+### Supported AI CLIs
+
+| CLI | Command | Auto-accept Flag | Model Support |
+|-----|---------|------------------|---------------|
+| **Claude Code** | `claude` | `--dangerously-skip-permissions` | Claude models |
+| **aider** | `aider` | `--yes-always` | GPT-4, Claude, Ollama, local |
+| **opencode** | `opencode` | (check docs) | Multiple providers |
+| **Codex CLI** | `codex` | `--auto-edit` | OpenAI models |
+| **Cody** | `cody chat` | - | Sourcegraph |
+
+### Adding to Shell Profile
+
+For persistent configuration, add to `~/.bashrc` or `~/.zshrc`:
+
+```bash
+# CompoundEngineering AI CLI configuration
+export AI_CLI="aider --yes-always"
+```
+
 ## Usage Examples
 
 ```
@@ -172,9 +213,17 @@ compound-start.sh /path/to/project
 
 ## Model Interoperability
 
-The Plan, Review, and Compound workflows are pure markdown procedures - any model can follow them.
+This pack is fully **agent-agnostic**:
 
-The Orchestrate workflow uses TypeScript tooling (orchestrate.ts) for tmux coordination. Models that support shell execution can use the full parallel workflow.
+- **Plan, Review, Compound workflows** - Pure markdown procedures that any AI model can follow
+- **Orchestrate workflow** - Uses the `AI_CLI` environment variable to launch any AI coding assistant
+
+The Orchestrate workflow uses TypeScript tooling (orchestrate.ts) for tmux coordination. It works with any AI CLI that:
+1. Can receive prompts via terminal input
+2. Has an "auto-accept" or "skip confirmation" mode
+3. Can execute file operations and shell commands
+
+Tested with: Claude Code, aider, opencode
 
 ## Credits
 
@@ -182,6 +231,11 @@ The Orchestrate workflow uses TypeScript tooling (orchestrate.ts) for tmux coord
 - **License:** MIT
 
 ## Changelog
+
+### 1.1.0 - 2026-02-19
+- Made Orchestrate workflow agent-agnostic via `AI_CLI` environment variable
+- Supports Claude Code, aider, opencode, and other AI coding CLIs
+- Updated documentation with agent configuration guide
 
 ### 1.0.0 - 2026-02-19
 - Initial release

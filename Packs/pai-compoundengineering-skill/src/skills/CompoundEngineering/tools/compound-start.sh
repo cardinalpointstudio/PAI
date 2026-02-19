@@ -1,12 +1,22 @@
 #!/bin/bash
 # Compound Engineering Workflow Session
-# Creates tmux session with 7 pre-configured windows and auto-launches Claude
+# Creates tmux session with 7 pre-configured windows and auto-launches AI agents
 # Single command to start the full parallel development workflow
+#
+# Agent-agnostic: Set AI_CLI environment variable to use different AI coding assistants
+# Examples:
+#   export AI_CLI="claude --dangerously-skip-permissions"  # Claude Code (default)
+#   export AI_CLI="aider --yes-always"                     # Aider
+#   export AI_CLI="opencode"                               # OpenCode
+#   export AI_CLI="codex --auto-edit"                      # Codex CLI
 
 SESSION_NAME="ce-dev"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(dirname "$SCRIPT_DIR")"
 WORKFLOW_DIR=".workflow"
+
+# AI CLI configuration - defaults to Claude Code if not set
+AI_CLI="${AI_CLI:-claude --dangerously-skip-permissions}"
 
 # Colors
 RED='\033[0;31m'
@@ -128,7 +138,8 @@ tmux new-window -t $SESSION_NAME -n "Status" -c "$PROJECT_DIR"
 # Go back to Orch window
 tmux select-window -t $SESSION_NAME:1
 
-echo -e "${BLUE}Launching orchestrator and Claude in all windows...${NC}"
+echo -e "${BLUE}Launching orchestrator and AI agents in all windows...${NC}"
+echo -e "${CYAN}Using: $AI_CLI${NC}"
 
 # ============================================
 # Window 1: Orchestrator
@@ -141,9 +152,9 @@ sleep 0.3
 # Window 2: Plan (Architect) - Human-in-loop
 # ============================================
 tmux send-keys -t $SESSION_NAME:2 "echo -e '${CYAN}=== PLAN Window (Architect) ===${NC}'" C-m
-tmux send-keys -t $SESSION_NAME:2 "echo 'This window is for planning. Claude will ask clarifying questions.'" C-m
+tmux send-keys -t $SESSION_NAME:2 "echo 'This window is for planning. The AI will ask clarifying questions.'" C-m
 tmux send-keys -t $SESSION_NAME:2 "echo ''" C-m
-tmux send-keys -t $SESSION_NAME:2 "claude --dangerously-skip-permissions" C-m
+tmux send-keys -t $SESSION_NAME:2 "$AI_CLI" C-m
 sleep 0.3
 
 # ============================================
@@ -152,7 +163,7 @@ sleep 0.3
 tmux send-keys -t $SESSION_NAME:3 "echo -e '${CYAN}=== BACKEND Worker ===${NC}'" C-m
 tmux send-keys -t $SESSION_NAME:3 "echo 'Waiting for plan to complete...'" C-m
 tmux send-keys -t $SESSION_NAME:3 "echo ''" C-m
-tmux send-keys -t $SESSION_NAME:3 "claude --dangerously-skip-permissions" C-m
+tmux send-keys -t $SESSION_NAME:3 "$AI_CLI" C-m
 sleep 0.3
 
 # ============================================
@@ -161,7 +172,7 @@ sleep 0.3
 tmux send-keys -t $SESSION_NAME:4 "echo -e '${CYAN}=== FRONTEND Worker ===${NC}'" C-m
 tmux send-keys -t $SESSION_NAME:4 "echo 'Waiting for plan to complete...'" C-m
 tmux send-keys -t $SESSION_NAME:4 "echo ''" C-m
-tmux send-keys -t $SESSION_NAME:4 "claude --dangerously-skip-permissions" C-m
+tmux send-keys -t $SESSION_NAME:4 "$AI_CLI" C-m
 sleep 0.3
 
 # ============================================
@@ -170,7 +181,7 @@ sleep 0.3
 tmux send-keys -t $SESSION_NAME:5 "echo -e '${CYAN}=== TESTS Worker ===${NC}'" C-m
 tmux send-keys -t $SESSION_NAME:5 "echo 'Waiting for plan to complete...'" C-m
 tmux send-keys -t $SESSION_NAME:5 "echo ''" C-m
-tmux send-keys -t $SESSION_NAME:5 "claude --dangerously-skip-permissions" C-m
+tmux send-keys -t $SESSION_NAME:5 "$AI_CLI" C-m
 sleep 0.3
 
 # ============================================
@@ -179,7 +190,7 @@ sleep 0.3
 tmux send-keys -t $SESSION_NAME:6 "echo -e '${CYAN}=== REVIEW Worker ===${NC}'" C-m
 tmux send-keys -t $SESSION_NAME:6 "echo 'This window handles code review after implementation.'" C-m
 tmux send-keys -t $SESSION_NAME:6 "echo ''" C-m
-tmux send-keys -t $SESSION_NAME:6 "claude --dangerously-skip-permissions" C-m
+tmux send-keys -t $SESSION_NAME:6 "$AI_CLI" C-m
 sleep 0.3
 
 # ============================================
