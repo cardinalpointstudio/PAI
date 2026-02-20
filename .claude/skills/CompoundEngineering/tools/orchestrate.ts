@@ -15,6 +15,20 @@ import * as readline from "readline";
 // ============================================================================
 
 type Phase = "init" | "planning" | "implementing" | "reviewing" | "refining" | "compounding" | "complete";
+type ModelOption = "claude-sonnet-4" | "claude-haiku-4" | "claude-opus-4" | "aider" | "custom";
+
+interface WorkerConfig {
+  plan: string;
+  backend: string;
+  frontend: string;
+  tests: string;
+  review: string;
+}
+
+interface WorkflowConfig {
+  models: WorkerConfig;
+  customCommands?: Partial<WorkerConfig>;
+}
 
 interface WorkflowState {
   phase: Phase;
@@ -123,6 +137,105 @@ function syncStateToFile(state: WorkflowState): void {
   } catch {
     // Ignore write errors
   }
+}
+
+// ============================================================================
+// Config Management
+// ============================================================================
+
+const DEFAULT_CONFIG: WorkflowConfig = {
+  models: {
+    plan: "claude-sonnet-4",
+    backend: "claude-sonnet-4",
+    frontend: "claude-sonnet-4",
+    tests: "claude-sonnet-4",
+    review: "claude-sonnet-4",
+  },
+};
+
+const MODEL_OPTIONS: { value: ModelOption; label: string; command: string }[] = [
+  { value: "claude-sonnet-4", label: "Sonnet 4", command: "claude --dangerously-skip-permissions" },
+  { value: "claude-haiku-4", label: "Haiku 4", command: "claude --dangerously-skip-permissions --model claude-haiku-4-20250514" },
+  { value: "claude-opus-4", label: "Opus 4", command: "claude --dangerously-skip-permissions --model claude-opus-4-20250514" },
+  { value: "aider", label: "Aider", command: "aider --yes-always" },
+  { value: "custom", label: "Custom", command: "" },
+];
+
+function loadConfig(): WorkflowConfig {
+  const configPath = workflowPath("config.json");
+  if (fileExists(configPath)) {
+    try {
+      const content = readFileSync(configPath, "utf-8");
+      const parsed = JSON.parse(content);
+      return { ...DEFAULT_CONFIG, ...parsed, models: { ...DEFAULT_CONFIG.models, ...parsed.models } };
+    } catch {
+      // Invalid config, return default
+    }
+  }
+  return DEFAULT_CONFIG;
+}
+
+function saveConfig(config: WorkflowConfig): boolean {
+  try {
+    const workflowDir = workflowPath();
+    if (!existsSync(workflowDir)) {
+      mkdirSync(workflowDir, { recursive: true });
+    }
+    const configPath = workflowPath("config.json");
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    return true;
+  } catch (e) {
+    console.error(`${C.red}Failed to save config: ${e}${C.reset}`);
+    return false;
+  }
+}
+
+function getModelCommand(model: string, customCommand?: string): string {
+  if (model === "custom" && customCommand) {
+    return customCommand;
+  }
+  const option = MODEL_OPTIONS.find(o => o.value === model);
+  return option?.command || "claude --dangerously-skip-permissions";
+}
+
+function restartWorkerWithModel(worker: string, command: string): void {
+  const windowMap: Record<string, number> = {
+    plan: WINDOWS.plan,
+    backend: WINDOWS.backend,
+    frontend: WINDOWS.frontend,
+    tests: WINDOWS.tests,
+    review: WINDOWS.review,
+  };
+
+  const windowNum = windowMap[worker];
+  if (!windowNum) return;
+
+  try {
+    // Send Ctrl+C first to cancel any pending operation
+    execSync(`tmux send-keys -t ${SESSION_NAME}:${windowNum} C-c`, { stdio: "ignore" });
+    // Then send /exit and press Enter
+    setTimeout(() => {
+      execSync(`tmux send-keys -t ${SESSION_NAME}:${windowNum} -- /exit`, { stdio: "ignore" });
+      execSync(`tmux send-keys -t ${SESSION_NAME}:${windowNum} C-m`, { stdio: "ignore" });
+    }, 500);
+    // Wait 4 seconds for Claude to fully exit, then send the new command and press Enter
+    setTimeout(() => {
+      execSync(`tmux send-keys -t ${SESSION_NAME}:${windowNum} -- '${command}'`, { stdio: "ignore" });
+      execSync(`tmux send-keys -t ${SESSION_NAME}:${windowNum} C-m`, { stdio: "ignore" });
+    }, 4500);
+  } catch {
+    // Ignore errors
+  }
+}
+
+function getModelLabel(model: string, customCommand?: string): string {
+  if (model === "custom" && customCommand) {
+    // Truncate long commands
+    const truncated = customCommand.length > 25 ? customCommand.slice(0, 22) + "..." : customCommand;
+    return `Custom: ${truncated}`;
+  }
+  const option = MODEL_OPTIONS.find(o => o.value === model);
+  return option?.label || model;
 }
 
 function getReviewStatus(signals: Record<string, boolean>): "PASS" | "FAIL" | "PENDING" {
@@ -593,6 +706,20 @@ function renderGitInfo(branchName?: string, commitCount?: number): void {
   console.log();
 }
 
+function renderModels(config: WorkflowConfig): void {
+  const workers = ["plan", "backend", "frontend", "tests", "review"] as const;
+  const models = workers.map(w => getModelLabel(config.models[w], config.customCommands?.[w]));
+  const allSame = models.every(m => m === models[0]);
+
+  if (allSame && !models[0].startsWith("Custom")) {
+    console.log(`  ${C.bold}Models:${C.reset} ${C.dim}All workers →${C.reset} ${C.green}${models[0]}${C.reset}`);
+  } else {
+    const compact = workers.map((w, i) => `${w[0].toUpperCase()}:${models[i].split(":")[0].split(" ")[0]}`).join(" ");
+    console.log(`  ${C.bold}Models:${C.reset} ${C.dim}${compact}${C.reset}`);
+  }
+  console.log();
+}
+
 function renderPhase(phase: Phase, iteration: number): void {
   const phaseColors: Record<Phase, string> = {
     init: C.dim,
@@ -742,16 +869,191 @@ function renderMenu(): void {
   console.log(`    ${C.cyan}[P]${C.reset} Plan done → Dispatch workers    ${C.cyan}[R]${C.reset} Dispatch Review`);
   console.log(`    ${C.cyan}[F]${C.reset} Dispatch Refine                 ${C.cyan}[C]${C.reset} Dispatch Compound`);
   console.log(`    ${C.cyan}[G]${C.reset} Push & create PR                ${C.cyan}[K]${C.reset} Manual commit checkpoint`);
-  console.log(`    ${C.cyan}[S]${C.reset} Refresh Status                  ${C.cyan}[N]${C.reset} New Feature (clear)`);
+  console.log(`    ${C.cyan}[M]${C.reset} Configure Models                ${C.cyan}[W]${C.reset} Restart Workers (apply models)`);
+  console.log(`    ${C.cyan}[N]${C.reset} New Feature (clear)             ${C.cyan}[S]${C.reset} Refresh Status`);
   console.log(`    ${C.cyan}[Q]${C.reset} Quit`);
   console.log();
   console.log(`  ${C.dim}Windows: Ctrl+b then 1=Orch 2=Plan 3=Back 4=Front 5=Tests 6=Review 7=Status${C.reset}`);
 }
 
-function render(state: WorkflowState): void {
+// ============================================================================
+// Model Configuration Menu
+// ============================================================================
+
+interface ModelMenuState {
+  config: WorkflowConfig;
+  selectedWorker: number;
+  isSelectingModel: boolean;
+}
+
+function renderModelMenu(menuState: ModelMenuState): void {
+  clearScreen();
+  const { config, selectedWorker, isSelectingModel } = menuState;
+  const workers = ["plan", "backend", "frontend", "tests", "review"] as const;
+
+  console.log(`${C.bgMagenta}${C.white}${C.bold}                                                                    ${C.reset}`);
+  console.log(`${C.bgMagenta}${C.white}${C.bold}   CONFIGURE WORKER MODELS                                          ${C.reset}`);
+  console.log(`${C.bgMagenta}${C.white}${C.bold}                                                                    ${C.reset}`);
+  console.log();
+
+  if (isSelectingModel) {
+    const workerName = workers[selectedWorker];
+    console.log(`  ${C.bold}Select model for ${C.cyan}${workerName.toUpperCase()}${C.reset}${C.bold}:${C.reset}`);
+    console.log();
+
+    MODEL_OPTIONS.forEach((option, idx) => {
+      const current = config.models[workerName] === option.value;
+      const prefix = current ? `${C.green}●${C.reset}` : `${C.dim}○${C.reset}`;
+      console.log(`    ${C.yellow}[${idx + 1}]${C.reset} ${prefix} ${option.label}`);
+    });
+
+    console.log();
+    console.log(`  ${C.dim}Press 1-${MODEL_OPTIONS.length} to select, [Esc] to go back${C.reset}`);
+  } else {
+    console.log(`  ${C.bold}Workers:${C.reset}`);
+    console.log();
+
+    workers.forEach((worker, idx) => {
+      const selected = idx === selectedWorker;
+      const prefix = selected ? `${C.cyan}▶${C.reset}` : ` `;
+      const model = getModelLabel(config.models[worker], config.customCommands?.[worker]);
+      const workerLabel = worker.charAt(0).toUpperCase() + worker.slice(1);
+      console.log(`  ${prefix} ${C.yellow}[${idx + 1}]${C.reset} ${workerLabel.padEnd(10)} ${C.dim}→${C.reset} ${C.green}${model}${C.reset}`);
+    });
+
+    console.log();
+    console.log(`  ${C.dim}─────────────────────────────────────────────────────${C.reset}`);
+    console.log(`  ${C.bold}Controls:${C.reset}`);
+    console.log(`    ${C.yellow}[1-5]${C.reset} Select worker to configure`);
+    console.log(`    ${C.yellow}[A]${C.reset}   Set ALL workers to same model`);
+    console.log(`    ${C.yellow}[S]${C.reset}   Save and return`);
+    console.log(`    ${C.yellow}[Esc]${C.reset} Cancel (discard changes)`);
+  }
+}
+
+async function runModelMenu(initialConfig: WorkflowConfig): Promise<WorkflowConfig | null> {
+  return new Promise((resolve) => {
+    const menuState: ModelMenuState = {
+      config: JSON.parse(JSON.stringify(initialConfig)),
+      selectedWorker: 0,
+      isSelectingModel: false,
+    };
+
+    const workers = ["plan", "backend", "frontend", "tests", "review"] as const;
+    let selectingAll = false;
+
+    // Ensure raw mode is enabled for keypress events
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
+    process.stdin.resume();
+
+    renderModelMenu(menuState);
+
+    const handleKey = (str: string | undefined, key: any) => {
+      if (key.name === "escape") {
+        if (menuState.isSelectingModel) {
+          menuState.isSelectingModel = false;
+          selectingAll = false;
+          renderModelMenu(menuState);
+        } else {
+          process.stdin.removeListener("keypress", handleKey);
+          resolve(null);
+        }
+        return;
+      }
+
+      if (menuState.isSelectingModel) {
+        const num = parseInt(str || "", 10);
+        if (num >= 1 && num <= MODEL_OPTIONS.length) {
+          const selectedModel = MODEL_OPTIONS[num - 1].value;
+
+          // Handle "custom" selection - prompt for command
+          if (selectedModel === "custom") {
+            process.stdin.removeListener("keypress", handleKey);
+            process.stdin.setRawMode(false);
+
+            const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+            const workerName = selectingAll ? "ALL workers" : workers[menuState.selectedWorker];
+
+            console.log();
+            rl.question(`  Enter command for ${workerName}: `, (answer) => {
+              rl.close();
+              if (process.stdin.isTTY) {
+                process.stdin.setRawMode(true);
+              }
+              process.stdin.resume();
+
+              if (answer && answer.trim()) {
+                if (!menuState.config.customCommands) {
+                  menuState.config.customCommands = {};
+                }
+
+                if (selectingAll) {
+                  workers.forEach(w => {
+                    menuState.config.models[w] = "custom";
+                    menuState.config.customCommands![w] = answer.trim();
+                  });
+                } else {
+                  const worker = workers[menuState.selectedWorker];
+                  menuState.config.models[worker] = "custom";
+                  menuState.config.customCommands[worker] = answer.trim();
+                }
+              }
+
+              selectingAll = false;
+              menuState.isSelectingModel = false;
+              renderModelMenu(menuState);
+              process.stdin.on("keypress", handleKey);
+            });
+            return;
+          }
+
+          // Non-custom selection
+          if (selectingAll) {
+            workers.forEach(w => { menuState.config.models[w] = selectedModel; });
+            selectingAll = false;
+          } else {
+            menuState.config.models[workers[menuState.selectedWorker]] = selectedModel;
+          }
+
+          menuState.isSelectingModel = false;
+          renderModelMenu(menuState);
+        }
+      } else {
+        const char = str?.toLowerCase();
+
+        if (char === "s") {
+          process.stdin.removeListener("keypress", handleKey);
+          resolve(menuState.config);
+          return;
+        }
+
+        if (char === "a") {
+          selectingAll = true;
+          menuState.isSelectingModel = true;
+          renderModelMenu(menuState);
+          return;
+        }
+
+        const num = parseInt(str || "", 10);
+        if (num >= 1 && num <= 5) {
+          menuState.selectedWorker = num - 1;
+          menuState.isSelectingModel = true;
+          renderModelMenu(menuState);
+        }
+      }
+    };
+
+    process.stdin.on("keypress", handleKey);
+  });
+}
+
+function render(state: WorkflowState, config?: WorkflowConfig): void {
   clearScreen();
   renderHeader();
   renderGitInfo(state.branchName, state.commitCount);
+  if (config) renderModels(config);
   renderPhase(state.phase, state.iteration);
   renderSignals(state.signals);
   renderFiles();
@@ -968,10 +1270,11 @@ async function main(): Promise<void> {
   let featureName: string | undefined = getFeatureNameFromPlan();
   let branchName: string | undefined = getCurrentBranch();
   let commitCount = getCommitCount();
+  let config = loadConfig();
   let state: WorkflowState = { phase, iteration, signals, featureName, branchName, commitCount };
 
   // Initial render and sync
-  render(state);
+  render(state, config);
   syncStateToFile(state);
 
   // Watch for signal changes
@@ -1023,17 +1326,21 @@ async function main(): Promise<void> {
     }
 
     state = { phase, iteration, signals, featureName, branchName, commitCount };
-    render(state);
+    render(state, config);
     syncStateToFile(state);
   });
 
   // Handle keyboard input
+  let inModelMenu = false;
+
   process.stdin.on("keypress", (str, key) => {
     if (key.ctrl && key.name === "c") {
       showCursor();
       console.log("\n");
       process.exit(0);
     }
+
+    if (inModelMenu) return; // Ignore keys while in model menu
 
     const char = str?.toLowerCase();
 
@@ -1050,7 +1357,7 @@ async function main(): Promise<void> {
           const branchResult = createFeatureBranch(planFeatureName);
           if (!branchResult.success) {
             console.log(`\n${C.red}✗ Failed to create branch: ${branchResult.error}${C.reset}`);
-            setTimeout(() => render(state), 2000);
+            setTimeout(() => render(state, config), 2000);
             break;
           }
           branchName = branchResult.branch;
@@ -1079,7 +1386,7 @@ async function main(): Promise<void> {
             phase = determinePhase(signals);
             commitCount = getCommitCount();
             state = { phase, iteration, signals, featureName, branchName, commitCount };
-            render(state);
+            render(state, config);
             syncStateToFile(state);
           }, 1000);
         }
@@ -1093,7 +1400,7 @@ async function main(): Promise<void> {
           signals = getSignals();
           phase = determinePhase(signals);
           state = { phase, iteration, signals };
-          render(state);
+          render(state, config);
           syncStateToFile(state);
         }, 500);
         break;
@@ -1109,7 +1416,7 @@ async function main(): Promise<void> {
           signals = getSignals();
           phase = determinePhase(signals);
           state = { phase, iteration, signals };
-          render(state);
+          render(state, config);
           syncStateToFile(state);
         }, 1000);
         break;
@@ -1124,12 +1431,12 @@ async function main(): Promise<void> {
             signals = getSignals();
             phase = determinePhase(signals);
             state = { phase, iteration, signals };
-            render(state);
+            render(state, config);
             syncStateToFile(state);
           }, 500);
         } else {
           console.log(`\n${C.red}Cannot compound - review has not passed${C.reset}`);
-          setTimeout(() => render(state), 1500);
+          setTimeout(() => render(state, config), 1500);
         }
         break;
 
@@ -1139,7 +1446,7 @@ async function main(): Promise<void> {
         phase = determinePhase(signals);
         commitCount = getCommitCount();
         state = { phase, iteration, signals, featureName, branchName, commitCount };
-        render(state);
+        render(state, config);
         syncStateToFile(state);
         break;
 
@@ -1147,7 +1454,7 @@ async function main(): Promise<void> {
         // Manual commit checkpoint
         if (phase === "init") {
           console.log(`\n${C.yellow}Nothing to commit yet - start planning first${C.reset}`);
-          setTimeout(() => render(state), 1500);
+          setTimeout(() => render(state, config), 1500);
           break;
         }
         const commitType = phase === "planning" ? "docs" :
@@ -1161,7 +1468,7 @@ async function main(): Promise<void> {
         } else {
           console.log(`\n${C.yellow}⚠ Nothing to commit (no changes)${C.reset}`);
         }
-        setTimeout(() => render(state), 1500);
+        setTimeout(() => render(state, config), 1500);
         break;
 
       case "g":
@@ -1178,17 +1485,63 @@ async function main(): Promise<void> {
             commitCount = getCommitCount();
             state = { phase, iteration, signals, featureName, branchName, commitCount };
             setTimeout(() => {
-              render(state);
+              render(state, config);
               syncStateToFile(state);
             }, 2000);
           } else {
             console.log(`\n${C.red}✗ Failed: ${result.error}${C.reset}`);
-            setTimeout(() => render(state), 2000);
+            setTimeout(() => render(state, config), 2000);
           }
         } else {
           console.log(`\n${C.red}Cannot create PR - compound not complete${C.reset}`);
-          setTimeout(() => render(state), 1500);
+          setTimeout(() => render(state, config), 1500);
         }
+        break;
+
+      case "m":
+        // Model configuration menu
+        inModelMenu = true;
+        showCursor();
+
+        runModelMenu(config).then((newConfig) => {
+          inModelMenu = false;
+          hideCursor();
+          process.stdin.resume();
+
+          if (newConfig) {
+            config = newConfig;
+            if (saveConfig(config)) {
+              console.log(`\n${C.green}✓ Model configuration saved to .workflow/config.json${C.reset}`);
+              console.log(`${C.dim}Press [W] to restart workers with new models${C.reset}`);
+            }
+          } else {
+            console.log(`\n${C.dim}Model configuration cancelled${C.reset}`);
+          }
+          setTimeout(() => render(state, config), 1500);
+        }).catch((e) => {
+          inModelMenu = false;
+          console.error(`\n${C.red}Model menu error: ${e}${C.reset}`);
+          setTimeout(() => render(state, config), 1500);
+        });
+        break;
+
+      case "w":
+        // Restart workers with configured models
+        console.log(`\n${C.cyan}Restarting workers with configured models...${C.reset}`);
+        {
+          const workers = ["plan", "backend", "frontend", "tests", "review"] as const;
+          workers.forEach((worker, idx) => {
+            const model = config.models[worker];
+            const customCmd = config.customCommands?.[worker];
+            const command = getModelCommand(model, customCmd);
+            setTimeout(() => {
+              restartWorkerWithModel(worker, command);
+              console.log(`  ${C.green}✓${C.reset} ${worker}: ${command.slice(0, 40)}${command.length > 40 ? "..." : ""}`);
+            }, idx * 500);  // Stagger /exit commands by 500ms
+          });
+        }
+        // Wait 6 seconds total (500ms * 5 workers + 3s for last command)
+        setTimeout(() => render(state, config), 6000);
         break;
 
       case "n":
@@ -1208,12 +1561,12 @@ async function main(): Promise<void> {
             refineCommitted = false;
             state = { phase, iteration, signals, featureName, branchName, commitCount };
             setTimeout(() => {
-              render(state);
+              render(state, config);
               console.log(`\n${C.green}✓ Workflow cleared. Go to Plan window (Ctrl+b 2) to start.${C.reset}`);
             }, 500);
           } else {
             console.log(`\n${C.dim}Cancelled${C.reset}`);
-            setTimeout(() => render(state), 500);
+            setTimeout(() => render(state, config), 500);
           }
         });
         break;

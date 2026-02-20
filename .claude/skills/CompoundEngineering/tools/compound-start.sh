@@ -8,6 +8,49 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(dirname "$SCRIPT_DIR")"
 WORKFLOW_DIR=".workflow"
 
+# ============================================
+# AI CLI Configuration
+# ============================================
+# Default AI CLI (can be overridden via environment)
+AI_CLI="${AI_CLI:-claude --dangerously-skip-permissions}"
+
+# Per-worker defaults (fall back to AI_CLI)
+AI_CLI_PLAN="${AI_CLI_PLAN:-$AI_CLI}"
+AI_CLI_BACKEND="${AI_CLI_BACKEND:-$AI_CLI}"
+AI_CLI_FRONTEND="${AI_CLI_FRONTEND:-$AI_CLI}"
+AI_CLI_TESTS="${AI_CLI_TESTS:-$AI_CLI}"
+AI_CLI_REVIEW="${AI_CLI_REVIEW:-$AI_CLI}"
+
+# Convert model ID to command
+model_to_command() {
+    local model="$1"
+    local custom_cmd="$2"
+    case "$model" in
+        "claude-sonnet-4")
+            echo "claude --dangerously-skip-permissions"
+            ;;
+        "claude-haiku-4")
+            echo "claude --dangerously-skip-permissions --model claude-haiku-4-20250514"
+            ;;
+        "claude-opus-4")
+            echo "claude --dangerously-skip-permissions --model claude-opus-4-20250514"
+            ;;
+        "aider")
+            echo "aider --yes-always"
+            ;;
+        "custom")
+            if [ -n "$custom_cmd" ]; then
+                echo "$custom_cmd"
+            else
+                echo "$AI_CLI"
+            fi
+            ;;
+        *)
+            echo "$AI_CLI"
+            ;;
+    esac
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -110,6 +153,43 @@ fi
 echo ""
 
 # ============================================
+# Load Model Configuration from config.json
+# ============================================
+CONFIG_FILE="$WORKFLOW_DIR/config.json"
+if [ -f "$CONFIG_FILE" ] && command -v bun >/dev/null 2>&1; then
+    echo -e "${YELLOW}[CONFIG] Loading model configuration...${NC}"
+
+    # Read models from config using bun
+    PLAN_MODEL=$(bun -e "const c = require('./$CONFIG_FILE'); console.log(c.models?.plan || '')" 2>/dev/null)
+    BACKEND_MODEL=$(bun -e "const c = require('./$CONFIG_FILE'); console.log(c.models?.backend || '')" 2>/dev/null)
+    FRONTEND_MODEL=$(bun -e "const c = require('./$CONFIG_FILE'); console.log(c.models?.frontend || '')" 2>/dev/null)
+    TESTS_MODEL=$(bun -e "const c = require('./$CONFIG_FILE'); console.log(c.models?.tests || '')" 2>/dev/null)
+    REVIEW_MODEL=$(bun -e "const c = require('./$CONFIG_FILE'); console.log(c.models?.review || '')" 2>/dev/null)
+
+    # Read custom commands
+    PLAN_CUSTOM=$(bun -e "const c = require('./$CONFIG_FILE'); console.log(c.customCommands?.plan || '')" 2>/dev/null)
+    BACKEND_CUSTOM=$(bun -e "const c = require('./$CONFIG_FILE'); console.log(c.customCommands?.backend || '')" 2>/dev/null)
+    FRONTEND_CUSTOM=$(bun -e "const c = require('./$CONFIG_FILE'); console.log(c.customCommands?.frontend || '')" 2>/dev/null)
+    TESTS_CUSTOM=$(bun -e "const c = require('./$CONFIG_FILE'); console.log(c.customCommands?.tests || '')" 2>/dev/null)
+    REVIEW_CUSTOM=$(bun -e "const c = require('./$CONFIG_FILE'); console.log(c.customCommands?.review || '')" 2>/dev/null)
+
+    # Override AI_CLI_* vars if models are configured
+    [ -n "$PLAN_MODEL" ] && AI_CLI_PLAN=$(model_to_command "$PLAN_MODEL" "$PLAN_CUSTOM")
+    [ -n "$BACKEND_MODEL" ] && AI_CLI_BACKEND=$(model_to_command "$BACKEND_MODEL" "$BACKEND_CUSTOM")
+    [ -n "$FRONTEND_MODEL" ] && AI_CLI_FRONTEND=$(model_to_command "$FRONTEND_MODEL" "$FRONTEND_CUSTOM")
+    [ -n "$TESTS_MODEL" ] && AI_CLI_TESTS=$(model_to_command "$TESTS_MODEL" "$TESTS_CUSTOM")
+    [ -n "$REVIEW_MODEL" ] && AI_CLI_REVIEW=$(model_to_command "$REVIEW_MODEL" "$REVIEW_CUSTOM")
+
+    echo -e "${GREEN}  Plan:     ${AI_CLI_PLAN}${NC}"
+    echo -e "${GREEN}  Backend:  ${AI_CLI_BACKEND}${NC}"
+    echo -e "${GREEN}  Frontend: ${AI_CLI_FRONTEND}${NC}"
+    echo -e "${GREEN}  Tests:    ${AI_CLI_TESTS}${NC}"
+    echo -e "${GREEN}  Review:   ${AI_CLI_REVIEW}${NC}"
+fi
+
+echo ""
+
+# ============================================
 # Create Tmux Session with 7 Windows
 # ============================================
 echo -e "${BLUE}Creating session with 7 windows...${NC}"
@@ -128,7 +208,7 @@ tmux new-window -t $SESSION_NAME -n "Status" -c "$PROJECT_DIR"
 # Go back to Orch window
 tmux select-window -t $SESSION_NAME:1
 
-echo -e "${BLUE}Launching orchestrator and Claude in all windows...${NC}"
+echo -e "${BLUE}Launching orchestrator and AI agents in all windows...${NC}"
 
 # ============================================
 # Window 1: Orchestrator
@@ -141,9 +221,9 @@ sleep 0.3
 # Window 2: Plan (Architect) - Human-in-loop
 # ============================================
 tmux send-keys -t $SESSION_NAME:2 "echo -e '${CYAN}=== PLAN Window (Architect) ===${NC}'" C-m
-tmux send-keys -t $SESSION_NAME:2 "echo 'This window is for planning. Claude will ask clarifying questions.'" C-m
+tmux send-keys -t $SESSION_NAME:2 "echo 'This window is for planning. The AI will ask clarifying questions.'" C-m
 tmux send-keys -t $SESSION_NAME:2 "echo ''" C-m
-tmux send-keys -t $SESSION_NAME:2 "claude --dangerously-skip-permissions" C-m
+tmux send-keys -t $SESSION_NAME:2 "$AI_CLI_PLAN" C-m
 sleep 0.3
 
 # ============================================
@@ -152,7 +232,7 @@ sleep 0.3
 tmux send-keys -t $SESSION_NAME:3 "echo -e '${CYAN}=== BACKEND Worker ===${NC}'" C-m
 tmux send-keys -t $SESSION_NAME:3 "echo 'Waiting for plan to complete...'" C-m
 tmux send-keys -t $SESSION_NAME:3 "echo ''" C-m
-tmux send-keys -t $SESSION_NAME:3 "claude --dangerously-skip-permissions" C-m
+tmux send-keys -t $SESSION_NAME:3 "$AI_CLI_BACKEND" C-m
 sleep 0.3
 
 # ============================================
@@ -161,7 +241,7 @@ sleep 0.3
 tmux send-keys -t $SESSION_NAME:4 "echo -e '${CYAN}=== FRONTEND Worker ===${NC}'" C-m
 tmux send-keys -t $SESSION_NAME:4 "echo 'Waiting for plan to complete...'" C-m
 tmux send-keys -t $SESSION_NAME:4 "echo ''" C-m
-tmux send-keys -t $SESSION_NAME:4 "claude --dangerously-skip-permissions" C-m
+tmux send-keys -t $SESSION_NAME:4 "$AI_CLI_FRONTEND" C-m
 sleep 0.3
 
 # ============================================
@@ -170,7 +250,7 @@ sleep 0.3
 tmux send-keys -t $SESSION_NAME:5 "echo -e '${CYAN}=== TESTS Worker ===${NC}'" C-m
 tmux send-keys -t $SESSION_NAME:5 "echo 'Waiting for plan to complete...'" C-m
 tmux send-keys -t $SESSION_NAME:5 "echo ''" C-m
-tmux send-keys -t $SESSION_NAME:5 "claude --dangerously-skip-permissions" C-m
+tmux send-keys -t $SESSION_NAME:5 "$AI_CLI_TESTS" C-m
 sleep 0.3
 
 # ============================================
@@ -179,7 +259,7 @@ sleep 0.3
 tmux send-keys -t $SESSION_NAME:6 "echo -e '${CYAN}=== REVIEW Worker ===${NC}'" C-m
 tmux send-keys -t $SESSION_NAME:6 "echo 'This window handles code review after implementation.'" C-m
 tmux send-keys -t $SESSION_NAME:6 "echo ''" C-m
-tmux send-keys -t $SESSION_NAME:6 "claude --dangerously-skip-permissions" C-m
+tmux send-keys -t $SESSION_NAME:6 "$AI_CLI_REVIEW" C-m
 sleep 0.3
 
 # ============================================

@@ -1,7 +1,7 @@
 ---
 name: PAI CompoundEngineering Skill
-pack-id: pai-compoundengineering-skill-v1.1.0
-version: 1.1.0
+pack-id: pai-compoundengineering-skill-v1.3.0
+version: 1.3.0
 author: salexanderb
 description: Systematic development workflow with parallel multi-agent implementation, code review, and learning capture. Plan -> Implement -> Review -> Compound -> Repeat.
 type: skill
@@ -231,6 +231,17 @@ Tested with: Claude Code, aider, opencode
 - **License:** MIT
 
 ## Changelog
+
+### 1.3.0 - 2026-02-20
+- Added interactive model menu (`[M]` key) in orchestrator
+- Custom command text input for any worker
+- Config persistence in `.workflow/config.json`
+- compound-start.sh reads model config on session start
+
+### 1.2.0 - 2026-02-20
+- Per-worker model configuration via environment variables
+- `AI_CLI_PLAN`, `AI_CLI_BACKEND`, `AI_CLI_FRONTEND`, `AI_CLI_TESTS`, `AI_CLI_REVIEW`
+- Falls back to `AI_CLI` if per-worker var not set
 
 ### 1.1.0 - 2026-02-19
 - Made Orchestrate workflow agent-agnostic via `AI_CLI` environment variable
