@@ -186,6 +186,7 @@
     "frontend-design@claude-code-plugins": true
   },
   "alwaysThinkingEnabled": true,
+  "includeBranding": false,
   "_envDocs": {
     "description": "Platform-agnostic environment variables used throughout the Personal AI system",
     "DA": "Digital Assistant name - your AI's identity (e.g., 'Kai', 'PAI', 'Nova'). Used in statusline, hooks, and agent identification.",
