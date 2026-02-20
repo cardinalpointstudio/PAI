@@ -15,7 +15,7 @@ import * as readline from "readline";
 // ============================================================================
 
 type Phase = "init" | "planning" | "implementing" | "reviewing" | "refining" | "compounding" | "complete";
-type ModelOption = "claude-sonnet-4" | "claude-haiku-4" | "claude-opus-4" | "aider" | "custom";
+type ModelOption = "default" | "claude-sonnet-4" | "claude-haiku-4" | "claude-opus-4" | "aider" | "custom";
 
 interface WorkerConfig {
   plan: string;
@@ -145,16 +145,17 @@ function syncStateToFile(state: WorkflowState): void {
 
 const DEFAULT_CONFIG: WorkflowConfig = {
   models: {
-    plan: "claude-sonnet-4",
-    backend: "claude-sonnet-4",
-    frontend: "claude-sonnet-4",
-    tests: "claude-sonnet-4",
-    review: "claude-sonnet-4",
+    plan: "default",
+    backend: "default",
+    frontend: "default",
+    tests: "default",
+    review: "default",
   },
 };
 
 const MODEL_OPTIONS: { value: ModelOption; label: string; command: string }[] = [
-  { value: "claude-sonnet-4", label: "Sonnet 4", command: "claude --dangerously-skip-permissions" },
+  { value: "default", label: "Default", command: "claude --dangerously-skip-permissions" },
+  { value: "claude-sonnet-4", label: "Sonnet 4", command: "claude --dangerously-skip-permissions --model claude-sonnet-4-20250514" },
   { value: "claude-haiku-4", label: "Haiku 4", command: "claude --dangerously-skip-permissions --model claude-haiku-4-20250514" },
   { value: "claude-opus-4", label: "Opus 4", command: "claude --dangerously-skip-permissions --model claude-opus-4-20250514" },
   { value: "aider", label: "Aider", command: "aider --yes-always" },

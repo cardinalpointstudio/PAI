@@ -26,8 +26,11 @@ model_to_command() {
     local model="$1"
     local custom_cmd="$2"
     case "$model" in
-        "claude-sonnet-4")
+        "default")
             echo "claude --dangerously-skip-permissions"
+            ;;
+        "claude-sonnet-4")
+            echo "claude --dangerously-skip-permissions --model claude-sonnet-4-20250514"
             ;;
         "claude-haiku-4")
             echo "claude --dangerously-skip-permissions --model claude-haiku-4-20250514"
