@@ -288,6 +288,42 @@ COMPLETED: [12 words max - drives voice output - REQUIRED]
 
 ---
 
+## Critical Mistakes - NEVER DO THIS
+
+**This section documents mistakes Claude has made. Read carefully and NEVER repeat them.**
+
+### Security Anti-Patterns
+
+| Mistake | Why It's Bad | Correct Approach |
+|---------|--------------|------------------|
+| **Credentials in URL query params** | URLs are logged in browser history, server logs, proxies, Referer headers | Always use POST with credentials in request body |
+| `localhost:3000/login?email=x&password=y` | Password exposed in plaintext in multiple places | `POST /login` with `{ email, password }` in body |
+| Pre-filling forms via URL params | Same exposure risk as above | Use proper form state, never URL params for secrets |
+| Generating "convenience" login URLs | Creates security vulnerability for "ease of use" | Use browser autofill or secure session tokens |
+
+### Code Anti-Patterns
+
+| Mistake | Why It's Bad | Correct Approach |
+|---------|--------------|------------------|
+| `<form method="GET">` for auth | Sends credentials in URL | Always `method="POST"` for sensitive data |
+| `window.location.href = '/login?password=' + pw` | Exposes password in URL | Use fetch/axios with POST body |
+| Storing secrets in localStorage unencrypted | XSS can steal them | Use httpOnly cookies or secure token storage |
+
+### Example of the Mistake (2024-02-22)
+
+**What happened:** Claude generated a URL like `localhost:3000/login?email=owner@demo.com&password=password123` for quick testing convenience.
+
+**Why it was wrong:**
+1. Password visible in browser address bar
+2. Saved in browser history
+3. Logged by web servers and proxies
+4. Sent in Referer header to other sites
+5. Could be bookmarked and shared accidentally
+
+**The rule:** NEVER put passwords, tokens, API keys, or any secrets in URLs. Not even for "quick testing." Not even in development. No exceptions.
+
+---
+
 ## Security Protocols
 
 **TWO REPOSITORIES - NEVER CONFUSE THEM:**
