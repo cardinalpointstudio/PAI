@@ -1,0 +1,102 @@
+[
+  {
+    "label": "Validate PAI Pack",
+    "command": "bun run Tools/validate-pack.ts",
+    "reveal": "always",
+    "hide": "never",
+    "show_summary": true,
+    "show_output": true
+  },
+  {
+    "label": "Validate PAI Pack (Changed Only)",
+    "command": "bun run Tools/validate-pack.ts --changed-only",
+    "reveal": "always",
+    "hide": "never",
+    "show_summary": true
+  },
+  {
+    "label": "Validate Protected State",
+    "command": "bun run Tools/validate-protected.ts",
+    "reveal": "always",
+    "hide": "never",
+    "show_summary": true
+  },
+  {
+    "label": "PAI Self-Test",
+    "command": "bun ~/.claude/hooks/self-test.ts 2>/dev/null || echo 'Self-test hook not found - checking PAI setup...' && ~/.claude/tools/setup/bootstrap.sh",
+    "reveal": "always",
+    "hide": "never",
+    "show_summary": true
+  },
+  {
+    "label": "Check PAI State",
+    "command": "cat Tools/CheckPAIState.md",
+    "reveal": "always",
+    "hide": "never"
+  },
+  {
+    "label": "Type Check (All TS Files)",
+    "command": "find . -name '*.ts' -not -path '*/node_modules/*' -exec bun tsc --noEmit {} + 2>&1 | head -50",
+    "reveal": "always",
+    "hide": "never",
+    "show_summary": true
+  },
+  {
+    "label": "Format with Prettier",
+    "command": "bunx prettier --write . --ignore-path .gitignore 2>/dev/null || echo 'Install prettier: bun add -d prettier'",
+    "reveal": "always",
+    "hide": "on_success",
+    "show_summary": true
+  },
+  {
+    "label": "List All Skills",
+    "command": "ls -la .claude/skills/",
+    "reveal": "always",
+    "hide": "never"
+  },
+  {
+    "label": "PAI Update",
+    "command": "git fetch upstream && git checkout main && git merge upstream/main --no-edit && git push origin main",
+    "reveal": "always",
+    "hide": "never",
+    "show_summary": true
+  },
+  {
+    "label": "Start Observability Dashboard",
+    "command": "cd .claude/skills/Observability/apps/server && bun install && bun run dev",
+    "reveal": "always",
+    "hide": "never",
+    "show_summary": true
+  },
+  {
+    "label": "Bundle All Packs",
+    "command": "for pack in Packs/*/; do echo \"Processing: $pack\"; done",
+    "reveal": "always",
+    "hide": "never",
+    "show_summary": true
+  },
+  {
+    "label": "Check Git Status",
+    "command": "git status --short && echo '---' && git log --oneline -5",
+    "reveal": "always",
+    "hide": "never"
+  },
+  {
+    "label": "Clean Node Modules",
+    "command": "find . -name 'node_modules' -type d -prune -exec rm -rf {} + 2>/dev/null; echo 'Cleaned all node_modules'",
+    "reveal": "always",
+    "hide": "on_success"
+  },
+  {
+    "label": "Search History",
+    "command": "echo 'Usage: rg -i \"search-term\" ~/.claude/History/'",
+    "reveal": "always",
+    "hide": "never"
+  },
+  {
+    "label": "Export Session",
+    "command": "echo 'Session export: cat ~/.claude/History/Sessions/$(date +%Y-%m)/$(ls -t ~/.claude/History/Sessions/$(date +%Y-%m)/ | head -1)'",
+    "reveal": "always",
+    "hide": "never"
+  }
+]
