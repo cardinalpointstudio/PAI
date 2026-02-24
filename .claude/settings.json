@@ -177,10 +177,6 @@
       }
     ]
   },
-  "statusLine": {
-    "type": "command",
-    "command": "bash ${PAI_DIR}/statusline-custom.sh"
-  },
   "enabledPlugins": {
     "browser-automation@browser-tools": true,
     "frontend-design@claude-code-plugins": true
