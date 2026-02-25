@@ -480,32 +480,123 @@ function dispatchReview(): void {
     renameSync(reviewFile, backupPath);
   }
 
-  const prompt = `You are the REVIEW worker. All implementation workers have completed.
+  const prompt = `You are the REVIEW COORDINATOR. All implementation workers have completed.
 
 ## YOUR TASK
-1. Run the test suite: bun test
-2. Run type checking: bun run tsc --noEmit
-3. Run linting: bun run lint (or eslint . --ext .ts,.tsx)
-4. Review all changes in .workflow/ and src/
-5. Check for security, performance, correctness, maintainability
 
-IMPORTANT: If ANY check fails (automated or code review), STATUS must be FAIL.
+### Step 1: Run Automated Checks
+Run these commands and capture results:
+1. \`bun test\` - Run test suite
+2. \`bun run tsc --noEmit\` - Type checking
+3. \`bun run lint\` or \`eslint . --ext .ts,.tsx\` - Linting
 
-## OUTPUT
-Create .workflow/REVIEW.md with:
-- Summary of changes
-- Issues found (if any)
-- STATUS: PASS or STATUS: FAIL
+### Step 2: Get the Diff
+Run: \`git diff main...HEAD\` to see all changes for review.
+
+### Step 3: Launch 4 Parallel Review Agents
+Use the Task tool to launch these 4 agents IN PARALLEL (single message, multiple Task calls):
+
+**Agent 1 - Security Review:**
+\`\`\`
+Task({
+  prompt: "Review this code diff for SECURITY issues only:\\n\\n[paste diff]\\n\\nFocus on:\\n- SQL/command injection\\n- Auth bypass (check BEFORE data access)\\n- Secrets in code/logs\\n- IDOR (ownership not verified)\\n- XSS (unsanitized user input)\\n\\nOutput:\\n## Security Review\\n### Issues Found\\n- [severity: critical/high/medium/low] [issue] at [file:line]\\n### Verdict: PASS or FAIL",
+  subagent_type: "general-purpose",
+  model: "haiku"
+})
+\`\`\`
+
+**Agent 2 - Performance Review:**
+\`\`\`
+Task({
+  prompt: "Review this code diff for PERFORMANCE issues only:\\n\\n[paste diff]\\n\\nFocus on:\\n- N+1 queries (query in loop)\\n- Unbounded queries (no limit/pagination)\\n- Blocking operations in async code\\n- Memory leaks (caches without eviction)\\n- Unnecessary re-renders (React)\\n\\nOutput:\\n## Performance Review\\n### Issues Found\\n- [severity: critical/high/medium/low] [issue] at [file:line]\\n### Verdict: PASS or FAIL",
+  subagent_type: "general-purpose",
+  model: "haiku"
+})
+\`\`\`
+
+**Agent 3 - Correctness Review:**
+\`\`\`
+Task({
+  prompt: "Review this code diff for CORRECTNESS issues only:\\n\\n[paste diff]\\n\\nFocus on:\\n- Null/undefined not handled\\n- Missing await on async calls\\n- Race conditions\\n- Off-by-one errors\\n- Error swallowing (empty catch)\\n- Array[0] without length check\\n\\nOutput:\\n## Correctness Review\\n### Issues Found\\n- [severity: critical/high/medium/low] [issue] at [file:line]\\n### Verdict: PASS or FAIL",
+  subagent_type: "general-purpose",
+  model: "haiku"
+})
+\`\`\`
+
+**Agent 4 - Maintainability Review:**
+\`\`\`
+Task({
+  prompt: "Review this code diff for MAINTAINABILITY issues only:\\n\\n[paste diff]\\n\\nFocus on:\\n- Magic numbers/strings\\n- Dead code\\n- Circular dependencies\\n- God objects (class does too much)\\n- Poor naming\\n- Missing error boundaries (React)\\n\\nOutput:\\n## Maintainability Review\\n### Issues Found\\n- [severity: critical/high/medium/low] [issue] at [file:line]\\n### Verdict: PASS or FAIL",
+  subagent_type: "general-purpose",
+  model: "haiku"
+})
+\`\`\`
+
+### Step 4: Consolidate Results
+After all agents complete, create .workflow/REVIEW.md:
+
+\`\`\`markdown
+# Code Review Summary
+
+## Automated Checks
+- Tests: PASS/FAIL
+- Type Check: PASS/FAIL
+- Lint: PASS/FAIL
+
+## Overall Verdict: [PASS / NEEDS FIXES / FAIL]
+
+If ANY critical issue OR automated check fails → STATUS: FAIL
+If only medium/low issues → STATUS: PASS (with notes)
+
+## Critical Issues (must fix)
+- [ ] [issue from any reviewer]
+
+## Recommended Fixes (should fix)
+- [ ] [issue]
+
+## Minor Suggestions (nice to have)
+- [issue]
+
+## Review Breakdown
+| Aspect | Verdict | Issues |
+|--------|---------|--------|
+| Security | PASS/FAIL | X issues |
+| Performance | PASS/FAIL | X issues |
+| Correctness | PASS/FAIL | X issues |
+| Maintainability | PASS/FAIL | X issues |
+
+## Agent Reports
+<details>
+<summary>Security Review</summary>
+[full output]
+</details>
+
+<details>
+<summary>Performance Review</summary>
+[full output]
+</details>
+
+<details>
+<summary>Correctness Review</summary>
+[full output]
+</details>
+
+<details>
+<summary>Maintainability Review</summary>
+[full output]
+</details>
+\`\`\`
 
 ## COMPLETION
-When done: touch .workflow/signals/review.done
+When REVIEW.md is complete: touch .workflow/signals/review.done
 
 ## IMPORTANT
 - Do NOT send tmux commands to other windows
 - Do NOT try to fix issues yourself
 - Just report findings and signal done
+- Launch all 4 review agents IN PARALLEL for speed
 
-START by checking signals: ls -la .workflow/signals/`;
+START by running: bun test && bun run tsc --noEmit`;
 
   tmuxSendKeys(WINDOWS.review, prompt);
 }
