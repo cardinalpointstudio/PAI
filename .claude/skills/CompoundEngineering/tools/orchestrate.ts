@@ -438,8 +438,11 @@ function tmuxSendKeys(window: number, text: string): void {
     execSync(`tmux load-buffer "${tmpFile}"`, { stdio: "ignore" });
     execSync(`tmux paste-buffer -t ${SESSION_NAME}:${window}`, { stdio: "ignore" });
 
-    // Send Enter to submit the prompt
-    execSync(`tmux send-keys -t ${SESSION_NAME}:${window} Enter`, { stdio: "ignore" });
+    // Small delay to let the terminal process the paste
+    execSync("sleep 0.5", { stdio: "ignore" });
+
+    // Send Enter (C-m) to submit the prompt
+    execSync(`tmux send-keys -t ${SESSION_NAME}:${window} C-m`, { stdio: "ignore" });
 
     // Clean up temp file
     unlinkSync(tmpFile);
