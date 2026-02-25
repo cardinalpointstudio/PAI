@@ -28,6 +28,7 @@ interface WorkerConfig {
 interface WorkflowConfig {
   models: WorkerConfig;
   customCommands?: Partial<WorkerConfig>;
+  reviewAgentModel?: "haiku" | "sonnet" | "opus";  // Model for parallel review sub-agents
 }
 
 interface WorkflowState {
@@ -151,6 +152,7 @@ const DEFAULT_CONFIG: WorkflowConfig = {
     tests: "default",
     review: "default",
   },
+  reviewAgentModel: "haiku",  // Default to haiku for speed, can set to "sonnet" for deeper analysis
 };
 
 const MODEL_OPTIONS: { value: ModelOption; label: string; command: string }[] = [
@@ -168,7 +170,12 @@ function loadConfig(): WorkflowConfig {
     try {
       const content = readFileSync(configPath, "utf-8");
       const parsed = JSON.parse(content);
-      return { ...DEFAULT_CONFIG, ...parsed, models: { ...DEFAULT_CONFIG.models, ...parsed.models } };
+      return {
+        ...DEFAULT_CONFIG,
+        ...parsed,
+        models: { ...DEFAULT_CONFIG.models, ...parsed.models },
+        reviewAgentModel: parsed.reviewAgentModel || DEFAULT_CONFIG.reviewAgentModel,
+      };
     } catch {
       // Invalid config, return default
     }
@@ -466,7 +473,7 @@ START by reading: cat ${taskSource}`;
   tmuxSendKeys(window, prompt);
 }
 
-function dispatchReview(): void {
+function dispatchReview(config: WorkflowConfig): void {
   // Clear old review state for fresh re-review
   const reviewSignal = workflowPath("signals/review.done");
   const reviewFile = workflowPath("REVIEW.md");
@@ -479,6 +486,8 @@ function dispatchReview(): void {
     const backupPath = workflowPath(`REVIEW-${Date.now()}.md`);
     renameSync(reviewFile, backupPath);
   }
+
+  const reviewModel = config.reviewAgentModel || "haiku";
 
   const prompt = `You are the REVIEW COORDINATOR. All implementation workers have completed.
 
@@ -501,7 +510,7 @@ Use the Task tool to launch these 4 agents IN PARALLEL (single message, multiple
 Task({
   prompt: "Review this code diff for SECURITY issues only:\\n\\n[paste diff]\\n\\nFocus on:\\n- SQL/command injection\\n- Auth bypass (check BEFORE data access)\\n- Secrets in code/logs\\n- IDOR (ownership not verified)\\n- XSS (unsanitized user input)\\n\\nOutput:\\n## Security Review\\n### Issues Found\\n- [severity: critical/high/medium/low] [issue] at [file:line]\\n### Verdict: PASS or FAIL",
   subagent_type: "general-purpose",
-  model: "haiku"
+  model: "${reviewModel}"
 })
 \`\`\`
 
@@ -510,7 +519,7 @@ Task({
 Task({
   prompt: "Review this code diff for PERFORMANCE issues only:\\n\\n[paste diff]\\n\\nFocus on:\\n- N+1 queries (query in loop)\\n- Unbounded queries (no limit/pagination)\\n- Blocking operations in async code\\n- Memory leaks (caches without eviction)\\n- Unnecessary re-renders (React)\\n\\nOutput:\\n## Performance Review\\n### Issues Found\\n- [severity: critical/high/medium/low] [issue] at [file:line]\\n### Verdict: PASS or FAIL",
   subagent_type: "general-purpose",
-  model: "haiku"
+  model: "${reviewModel}"
 })
 \`\`\`
 
@@ -519,7 +528,7 @@ Task({
 Task({
   prompt: "Review this code diff for CORRECTNESS issues only:\\n\\n[paste diff]\\n\\nFocus on:\\n- Null/undefined not handled\\n- Missing await on async calls\\n- Race conditions\\n- Off-by-one errors\\n- Error swallowing (empty catch)\\n- Array[0] without length check\\n\\nOutput:\\n## Correctness Review\\n### Issues Found\\n- [severity: critical/high/medium/low] [issue] at [file:line]\\n### Verdict: PASS or FAIL",
   subagent_type: "general-purpose",
-  model: "haiku"
+  model: "${reviewModel}"
 })
 \`\`\`
 
@@ -528,7 +537,7 @@ Task({
 Task({
   prompt: "Review this code diff for MAINTAINABILITY issues only:\\n\\n[paste diff]\\n\\nFocus on:\\n- Magic numbers/strings\\n- Dead code\\n- Circular dependencies\\n- God objects (class does too much)\\n- Poor naming\\n- Missing error boundaries (React)\\n\\nOutput:\\n## Maintainability Review\\n### Issues Found\\n- [severity: critical/high/medium/low] [issue] at [file:line]\\n### Verdict: PASS or FAIL",
   subagent_type: "general-purpose",
-  model: "haiku"
+  model: "${reviewModel}"
 })
 \`\`\`
 
@@ -1508,8 +1517,8 @@ async function main(): Promise<void> {
 
       case "r":
         // Dispatch review
-        console.log(`\n${C.cyan}Dispatching review...${C.reset}`);
-        dispatchReview();
+        console.log(`\n${C.cyan}Dispatching review (model: ${config.reviewAgentModel || "haiku"})...${C.reset}`);
+        dispatchReview(config);
         setTimeout(() => {
           signals = getSignals();
           phase = determinePhase(signals);
