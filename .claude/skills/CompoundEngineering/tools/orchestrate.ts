@@ -406,6 +406,7 @@ function determinePhase(signals: Record<string, boolean>): Phase {
 
   const reviewStatus = getReviewStatus(signals);
   const refineComplete = signals["backend-refine"] && signals["frontend-refine"] && signals["tests-refine"];
+  const refineInProgress = signals["backend-refine"] || signals["frontend-refine"] || signals["tests-refine"];
 
   // After any review (initial or post-refine), check status
   if (signals.review && reviewStatus === "PASS") return "compounding";
@@ -419,6 +420,9 @@ function determinePhase(signals: Record<string, boolean>): Phase {
     }
     return "reviewing"; // Ready for re-review OR waiting for review result
   }
+
+  // Refine in progress (some workers done, but not all)
+  if (refineInProgress) return "refining";
 
   if (signals.review && reviewStatus === "FAIL") return "refining";
 
