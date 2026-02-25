@@ -429,11 +429,20 @@ function determinePhase(signals: Record<string, boolean>): Phase {
 
 function tmuxSendKeys(window: number, text: string): void {
   try {
-    // Escape single quotes in the text
-    const escaped = text.replace(/'/g, "'\"'\"'");
-    // Send text first, then Enter separately to ensure it's executed
-    execSync(`tmux send-keys -t ${SESSION_NAME}:${window} '${escaped}'`, { stdio: "ignore" });
+    // For long/complex prompts, use temp file + load-buffer approach
+    // This avoids shell escaping issues with backticks, quotes, etc.
+    const tmpFile = `/tmp/ce-prompt-${Date.now()}.txt`;
+    writeFileSync(tmpFile, text);
+
+    // Load the file into tmux buffer and paste it
+    execSync(`tmux load-buffer "${tmpFile}"`, { stdio: "ignore" });
+    execSync(`tmux paste-buffer -t ${SESSION_NAME}:${window}`, { stdio: "ignore" });
+
+    // Send Enter to submit the prompt
     execSync(`tmux send-keys -t ${SESSION_NAME}:${window} Enter`, { stdio: "ignore" });
+
+    // Clean up temp file
+    unlinkSync(tmpFile);
   } catch (e) {
     console.error(`Failed to send keys to window ${window}`);
   }
