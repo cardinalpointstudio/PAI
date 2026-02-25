@@ -1566,9 +1566,19 @@ async function main(): Promise<void> {
         break;
 
       case "f":
-        // Dispatch refine
+        // Dispatch refine - clear old signals first for fresh cycle
         console.log(`\n${C.cyan}Dispatching refine workers...${C.reset}`);
         iteration++;
+
+        // Clear old refine and review signals for fresh cycle
+        const refineSignals = ["backend-refine", "frontend-refine", "tests-refine", "review"];
+        for (const sig of refineSignals) {
+          const sigPath = workflowPath(`signals/${sig}.done`);
+          if (fileExists(sigPath)) {
+            unlinkSync(sigPath);
+          }
+        }
+
         dispatchWorker("backend", WINDOWS.backend, true);
         setTimeout(() => dispatchWorker("frontend", WINDOWS.frontend, true), 300);
         setTimeout(() => dispatchWorker("tests", WINDOWS.tests, true), 600);
