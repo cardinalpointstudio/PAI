@@ -405,11 +405,19 @@ function determinePhase(signals: Record<string, boolean>): Phase {
   if (signals.compound && signals.pr) return "complete";
 
   const reviewStatus = getReviewStatus(signals);
+  const refineComplete = signals["backend-refine"] && signals["frontend-refine"] && signals["tests-refine"];
 
+  // After any review (initial or post-refine), check status
   if (signals.review && reviewStatus === "PASS") return "compounding";
 
-  if (signals["backend-refine"] && signals["frontend-refine"] && signals["tests-refine"]) {
-    return "reviewing"; // Ready for re-review after refine
+  // After refine, check if re-review is done
+  if (refineComplete) {
+    if (signals.review) {
+      // Re-review completed after refine
+      if (reviewStatus === "FAIL") return "refining"; // Need another refine cycle
+      // reviewStatus === "PENDING" means waiting for review to complete
+    }
+    return "reviewing"; // Ready for re-review OR waiting for review result
   }
 
   if (signals.review && reviewStatus === "FAIL") return "refining";
@@ -934,15 +942,25 @@ function renderNextAction(phase: Phase, signals: Record<string, boolean>): void 
     case "reviewing":
       // Check if refine already completed (post-refine review needed)
       const refineComplete = signals["backend-refine"] && signals["frontend-refine"] && signals["tests-refine"];
+      const reviewStatus = getReviewStatus(signals);
 
-      if (refineComplete) {
+      if (refineComplete && signals.review) {
+        // Post-refine review completed - show result
+        if (reviewStatus === "PASS") {
+          console.log(`    ${C.green}Review PASSED!${C.reset} Press ${C.bold}[C]${C.reset} to dispatch compound`);
+        } else if (reviewStatus === "FAIL") {
+          console.log(`    ${C.red}Review still FAILED.${C.reset} Press ${C.bold}[F]${C.reset} for another refine cycle`);
+        } else {
+          console.log(`    Waiting for re-review to complete...`);
+        }
+      } else if (refineComplete) {
         // Refine done, need to re-run review
         console.log(`    ${C.yellow}Refine complete.${C.reset} Press ${C.bold}[R]${C.reset} to re-run review`);
       } else if (signals.review) {
-        const status = getReviewStatus(signals);
-        if (status === "PASS") {
+        // Initial review completed
+        if (reviewStatus === "PASS") {
           console.log(`    ${C.green}Review PASSED!${C.reset} Press ${C.bold}[C]${C.reset} to dispatch compound`);
-        } else if (status === "FAIL") {
+        } else if (reviewStatus === "FAIL") {
           console.log(`    ${C.red}Review FAILED.${C.reset} Press ${C.bold}[F]${C.reset} to dispatch refine workers`);
         } else {
           console.log(`    Waiting for review to complete...`);
