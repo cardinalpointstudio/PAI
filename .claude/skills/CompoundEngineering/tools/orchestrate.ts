@@ -835,8 +835,8 @@ function renderNextAction(phase: Phase, signals: Record<string, boolean>): void 
           console.log(`    Waiting for review to complete...`);
         }
       } else {
-        console.log(`    Waiting for review to complete...`);
-        console.log(`    ${C.dim}(Check window 6 for progress)${C.reset}`);
+        // Review not dispatched yet - prompt user to start it
+        console.log(`    ${C.cyan}Implementation complete!${C.reset} Press ${C.bold}[R]${C.reset} to dispatch review`);
       }
       break;
     case "refining":
@@ -1348,6 +1348,28 @@ async function main(): Promise<void> {
     switch (char) {
       case "p":
         // Plan done - create branch, commit plan, dispatch implementation workers
+        // First, validate all required files exist
+        const requiredFiles = [
+          { path: "PLAN.md", label: "PLAN.md" },
+          { path: "tasks/backend.md", label: "tasks/backend.md" },
+          { path: "tasks/frontend.md", label: "tasks/frontend.md" },
+          { path: "tasks/tests.md", label: "tasks/tests.md" },
+        ];
+        const missingFiles = requiredFiles.filter(f => !fileExists(workflowPath(f.path)));
+
+        if (missingFiles.length > 0) {
+          console.log(`\n${C.red}❌ Cannot dispatch workers - missing required files:${C.reset}`);
+          missingFiles.forEach(f => console.log(`   ${C.yellow}• .workflow/${f.label}${C.reset}`));
+          console.log(`\n${C.dim}Go to Plan window (Ctrl+b 2) and ensure all files are created.${C.reset}`);
+          console.log(`${C.dim}The Plan agent must output:${C.reset}`);
+          console.log(`${C.dim}  - .workflow/PLAN.md${C.reset}`);
+          console.log(`${C.dim}  - .workflow/tasks/backend.md${C.reset}`);
+          console.log(`${C.dim}  - .workflow/tasks/frontend.md${C.reset}`);
+          console.log(`${C.dim}  - .workflow/tasks/tests.md${C.reset}`);
+          setTimeout(() => render(state, config), 4000);
+          break;
+        }
+
         if (fileExists(workflowPath("PLAN.md"))) {
           // Get feature name from plan
           const planFeatureName = getFeatureNameFromPlan();

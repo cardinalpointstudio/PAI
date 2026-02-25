@@ -229,6 +229,45 @@ tmux send-keys -t $SESSION_NAME:2 "echo ''" C-m
 tmux send-keys -t $SESSION_NAME:2 "$AI_CLI_PLAN" C-m
 sleep 0.3
 
+# Auto-inject Plan agent instructions after Claude starts
+# This runs in background so it doesn't block the rest of setup
+(
+    sleep 3  # Wait for Claude to fully initialize
+
+    PLAN_INSTRUCTIONS='You are the PLAN agent in a Compound Engineering workflow.
+
+## CRITICAL: Required Output Files
+
+You MUST create these files in the .workflow/ directory:
+
+1. `.workflow/PLAN.md` - Implementation plan with architecture, approach, and task breakdown
+2. `.workflow/tasks/backend.md` - Backend worker tasks (API, DB, server code)
+3. `.workflow/tasks/frontend.md` - Frontend worker tasks (UI, components, pages)
+4. `.workflow/tasks/tests.md` - Test worker tasks (unit, integration, e2e tests)
+
+Optionally create:
+- `.workflow/contracts/*.ts` - TypeScript interfaces for cross-worker contracts
+
+## IMPORTANT
+
+- Do NOT save to ~/.claude/plans/ - use .workflow/ ONLY
+- The orchestrator validates these files before dispatching workers
+- Without all 4 files, workers cannot be dispatched
+
+## Your Process
+
+1. Ask clarifying questions about the feature
+2. Research the codebase to understand patterns
+3. Design the implementation approach
+4. Write PLAN.md with architecture and task breakdown
+5. Create task files for each worker domain
+6. Signal completion: touch .workflow/signals/plan.done
+
+When the user describes a feature, begin the planning process.'
+
+    tmux send-keys -t $SESSION_NAME:2 "$PLAN_INSTRUCTIONS" C-m
+) &
+
 # ============================================
 # Window 3: Backend Worker
 # ============================================
