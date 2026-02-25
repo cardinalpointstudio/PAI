@@ -255,8 +255,9 @@ function getReviewStatus(signals: Record<string, boolean>): "PASS" | "FAIL" | "P
 
   try {
     const content = readFileSync(reviewPath, "utf-8");
-    if (content.includes("STATUS: PASS")) return "PASS";
-    if (content.includes("STATUS: FAIL")) return "FAIL";
+    // Check for various status formats (legacy and new multi-agent format)
+    if (content.includes("STATUS: PASS") || content.includes("Overall Verdict: PASS")) return "PASS";
+    if (content.includes("STATUS: FAIL") || content.includes("Overall Verdict: FAIL") || content.includes("Verdict: FAIL")) return "FAIL";
   } catch {
     // File might not be readable
   }
