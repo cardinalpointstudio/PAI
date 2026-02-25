@@ -972,7 +972,13 @@ function renderNextAction(phase: Phase, signals: Record<string, boolean>): void 
       break;
     case "refining":
       const refineDone = signals["backend-refine"] && signals["frontend-refine"] && signals["tests-refine"];
-      if (refineDone) {
+      const reviewDone = signals.review && getReviewStatus(signals) === "FAIL";
+
+      if (refineDone && reviewDone) {
+        // Review ran after refine and still failed - need another cycle
+        console.log(`    ${C.red}Review still FAILED.${C.reset} Press ${C.bold}[F]${C.reset} for another refine cycle`);
+      } else if (refineDone) {
+        // Refine done, ready for re-review
         console.log(`    Refine complete! Press ${C.bold}[R]${C.reset} to re-run review`);
       } else {
         console.log(`    Waiting for refine workers to complete...`);
