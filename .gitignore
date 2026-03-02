@@ -69,3 +69,9 @@ credentials/
 
 # Local projects (separate repos)
 projects/
+
+# Company data (private, not version controlled)
+company-os/
+
+# Cloudflare local state
+.wrangler/
