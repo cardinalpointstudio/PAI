@@ -69,13 +69,29 @@ app.delete('/posts/:id', async (c) => {
 	await db.posts.delete(c.req.param('id'))  // Anyone can delete any post!
 })
 
-// ✅ Good: Verify ownership
-app.delete('/posts/:id', async (c) => {
-	const post = await db.posts.findById(c.req.param('id'))
-	if (post.authorId !== c.get('user').id) {
+// ❌ Bad: TOCTOU - Ownership in SELECT but not in DELETE
+app.delete('/presets/:id', async (c) => {
+	const preset = await db.select().from(presets).where(eq(presets.id, id))
+	if (preset.academyId !== userAcademyId) {
 		return c.json({ error: 'Forbidden' }, 403)
 	}
-	await db.posts.delete(c.req.param('id'))
+	// Race condition: another request could change ownership between SELECT and DELETE
+	await db.delete(presets).where(eq(presets.id, id))  // No ownership check!
+})
+
+// ✅ Good: Ownership in the mutation WHERE clause itself
+app.delete('/presets/:id', async (c) => {
+	const result = await db.delete(presets).where(
+		and(
+			eq(presets.id, id),
+			eq(presets.academyId, userAcademyId)  // Atomic ownership check
+		)
+	).returning()
+
+	if (result.length === 0) {
+		return c.json({ error: 'Not found or forbidden' }, 404)
+	}
+	return c.json({ success: true })
 })
 ```
 
@@ -94,6 +110,74 @@ import DOMPurify from 'dompurify'
 
 // ✅ Good: Validate URL scheme
 const safeUrl = url.startsWith('https://') ? url : '#'
+```
+
+### CSS Color Injection Prevention
+
+```typescript
+// ❌ Bad: Regex-only validation can be bypassed
+const isValidColor = (v: string) => /^#?[a-f0-9]{3,6}$/i.test(v)
+
+// ❌ Bad: Trusting any string as color
+<div style={{ backgroundColor: userColor }} />
+
+// ✅ Good: Whitelist of safe color values
+const SAFE_COLORS = new Set(['red', 'blue', 'green', /* ... */])
+
+function isValidColor(value: string): boolean {
+  const lowered = value.toLowerCase()
+  // Strict hex format only (#RGB or #RRGGBB)
+  if (/^#[0-9a-f]{3}$/.test(lowered) || /^#[0-9a-f]{6}$/.test(lowered)) {
+    return true
+  }
+  return SAFE_COLORS.has(lowered)  // Whitelist approach
+}
+```
+
+### localStorage Data Injection
+
+```typescript
+// ❌ Bad: Trusting localStorage data without validation
+function loadSettings(): Settings {
+	const stored = localStorage.getItem('settings')
+	if (stored) {
+		return JSON.parse(stored)  // Could be any shape!
+	}
+	return defaultSettings
+}
+
+// ❌ Bad: Only type assertion (no runtime check)
+function loadSettings(): Settings {
+	const stored = localStorage.getItem('settings')
+	return stored ? JSON.parse(stored) as Settings : defaultSettings
+}
+
+// ✅ Good: Validate with Zod schema
+import { z } from 'zod'
+
+const settingsSchema = z.object({
+	theme: z.enum(['light', 'dark']),
+	language: z.string(),
+	notifications: z.boolean(),
+})
+
+function loadSettings(): Settings {
+	try {
+		const stored = localStorage.getItem('settings')
+		if (stored) {
+			const parsed = JSON.parse(stored)
+			const result = settingsSchema.partial().safeParse(parsed)
+			if (result.success) {
+				return { ...defaultSettings, ...result.data }
+			}
+			// Clear corrupted data
+			localStorage.removeItem('settings')
+		}
+	} catch {
+		localStorage.removeItem('settings')
+	}
+	return defaultSettings
+}
 ```
 
 ---
@@ -190,6 +274,73 @@ function Parent() {
 }
 ```
 
+### Context Value Not Memoized
+
+```tsx
+// ❌ Bad: New object on every render causes all consumers to re-render
+function SettingsProvider({ children }) {
+	const [settings, setSettings] = useState(defaultSettings)
+
+	// This object is recreated every render!
+	return (
+		<SettingsContext.Provider value={{
+			...settings,
+			setTheme: (t) => setSettings(s => ({...s, theme: t})),
+			toggleTheme: () => setSettings(s => ({...s, theme: s.theme === 'light' ? 'dark' : 'light'})),
+		}}>
+			{children}
+		</SettingsContext.Provider>
+	)
+}
+
+// ✅ Good: Memoize context value and callbacks
+function SettingsProvider({ children }) {
+	const [settings, setSettings] = useState(defaultSettings)
+
+	const setTheme = useCallback((theme) => {
+		setSettings(s => ({...s, theme}))
+	}, [])
+
+	const toggleTheme = useCallback(() => {
+		setSettings(s => ({...s, theme: s.theme === 'light' ? 'dark' : 'light'}))
+	}, [])
+
+	const contextValue = useMemo(() => ({
+		...settings,
+		setTheme,
+		toggleTheme,
+	}), [settings, setTheme, toggleTheme])
+
+	return (
+		<SettingsContext.Provider value={contextValue}>
+			{children}
+		</SettingsContext.Provider>
+	)
+}
+```
+
+### useEffect Interval Memory Leaks
+
+```tsx
+// ❌ Bad: Missing dependency - interval not cleared when showSeconds changes
+useEffect(() => {
+	const interval = setInterval(() => setTime(new Date()), 1000)
+	return () => clearInterval(interval)
+}, [])  // showSeconds not in deps - memory leak!
+
+// ❌ Bad: No cleanup function at all
+useEffect(() => {
+	setInterval(() => setTime(new Date()), 1000)  // Never cleared!
+}, [showSeconds])
+
+// ✅ Good: Proper deps AND cleanup
+useEffect(() => {
+	const ms = showSeconds ? 1000 : 60000
+	const interval = setInterval(() => setTime(new Date()), ms)
+	return () => clearInterval(interval)  // Cleanup when deps change or unmount
+}, [showSeconds])
+```
+
 ---
 
 ## Correctness Patterns
@@ -233,6 +384,65 @@ function process(value: number | undefined) {
 }
 ```
 
+### Null Coalescing vs Type Assertion Precedence
+
+```typescript
+// ❌ Bad: Type assertion has higher precedence than ??
+const config = widget_config as ConfigType ?? {}
+// Evaluates as: (widget_config as ConfigType) ?? {}
+// If widget_config is null, you get null typed as ConfigType, not {}
+
+// ✅ Good: Parentheses ensure correct order
+const config = (widget_config ?? {}) as ConfigType
+// Evaluates as: (widget_config ?? {}) as ConfigType
+// If widget_config is null, you get {} typed as ConfigType
+```
+
+### Database Result Array Access
+
+```typescript
+// ❌ Bad: Assuming array has elements
+const results = await db.update(table).set(data).returning()
+const updated = results[0]!  // Non-null assertion hides failures
+
+// ❌ Bad: Destructuring assumes success
+const [created] = await db.insert(table).values(data).returning()
+
+// ✅ Good: Check length before access
+const results = await db.update(table).set(data).returning()
+if (results.length === 0) {
+	throw new Error(`Failed to update ${resourceId}`)
+}
+const updated = results[0]
+```
+
+### Type Guard in Filter-Map Chains
+
+```typescript
+// ❌ Bad: Unsafe cast after filter
+const valid = items
+  .filter((p) => p.isValid && p.validatedData)
+  .map((p) => p.validatedData as ValidatedType)  // Cast hides undefined!
+
+// ✅ Good: Type predicate in filter narrows type for map
+const valid = items
+  .filter(
+    (p): p is Item & { validatedData: ValidatedType } =>
+      p.isValid && p.validatedData !== undefined
+  )
+  .map((p) => p.validatedData)  // TypeScript knows it's defined
+```
+
+### Array.isArray() for JSON Parsing
+
+```typescript
+// ❌ Bad: Truthy non-arrays like {} or "string" pass || check
+const segments = (plan.segments || []).map(...)  // {} is truthy!
+
+// ✅ Good: Explicitly verify array type
+const segments = (Array.isArray(plan.segments) ? plan.segments : []).map(...)
+```
+
 ### Race Conditions
 
 ```typescript
@@ -250,6 +460,41 @@ const data = cache.get(key) ?? await mutex.runExclusive(async () => {
 	cache.set(key, data)
 	return data
 })
+```
+
+### React useEffect Async Race Conditions
+
+```typescript
+// ❌ Bad: State guard set AFTER async call
+const hasLoaded = useRef(false)
+useEffect(() => {
+	const load = async () => {
+		const data = await fetchAPI()  // Effect runs twice in StrictMode!
+		hasLoaded.current = true       // Too late, both calls already started
+		setState(data)
+	}
+	if (!hasLoaded.current) load()
+}, [deps])
+
+// ✅ Good: Dual guard pattern - before AND after async
+useEffect(() => {
+	let isCancelled = false
+	const loadedKey = useRef<string | null>(null)
+
+	const load = async () => {
+		const key = `${dep1}-${dep2}`
+		if (loadedKey.current === key) return  // Guard BEFORE async
+		loadedKey.current = key
+
+		const data = await fetchAPI()
+
+		if (isCancelled) return  // Guard AFTER async
+		setState(data)
+	}
+
+	load()
+	return () => { isCancelled = true }
+}, [dep1, dep2])
 ```
 
 ### Async/Await Mistakes
@@ -299,6 +544,87 @@ try {
 } catch (e) {
 	logger.error('Operation failed', { error: e })
 	throw new AppError('Operation failed', { cause: e })
+}
+```
+
+### Next.js Hydration Mismatch (Theme/Dark Mode)
+
+```tsx
+// ❌ Bad: Theme class applied client-side causes hydration mismatch
+// Server renders: <html>
+// Client hydrates with: <html class="dark"> (from localStorage)
+// Result: Hydration error!
+
+function RootLayout({ children }) {
+	return (
+		<html lang="en">  {/* No suppressHydrationWarning */}
+			<body>{children}</body>
+		</html>
+	)
+}
+
+// In SettingsProvider:
+useEffect(() => {
+	document.documentElement.classList.add('dark')  // Causes mismatch!
+}, [])
+
+// ✅ Good: Use suppressHydrationWarning for theme-controlled elements
+function RootLayout({ children }) {
+	return (
+		<html lang="en" suppressHydrationWarning>
+			<body>{children}</body>
+		</html>
+	)
+}
+
+// Note: suppressHydrationWarning is SAFE for theme toggling.
+// It tells React to expect client-side changes to this element's attributes.
+// Only use on elements whose attributes are legitimately set client-side.
+```
+
+### Optimistic Updates Without Rollback
+
+```typescript
+// ❌ Bad: No rollback on API failure
+const updateItem = async (id: string, data: Data) => {
+	// Optimistic update
+	setItems(prev => prev.map(i => i.id === id ? {...i, ...data} : i))
+
+	try {
+		await api.update(id, data)
+	} catch (error) {
+		console.error(error)  // UI now inconsistent with server!
+	}
+}
+
+// ❌ Bad: Stale closure in rollback
+const updateItem = async (id: string, data: Data) => {
+	const previousItems = items  // Captured from closure - may be stale!
+	setItems(prev => prev.map(i => i.id === id ? {...i, ...data} : i))
+
+	try {
+		await api.update(id, data)
+	} catch {
+		setItems(previousItems)  // Wrong state if concurrent updates
+	}
+}
+
+// ✅ Good: Capture state correctly and rollback
+const updateItem = async (id: string, data: Data) => {
+	let previousItems: Item[] | null = null
+
+	// Capture AND update atomically
+	setItems(prev => {
+		previousItems = prev  // Capture current state
+		return prev.map(i => i.id === id ? {...i, ...data} : i)
+	})
+
+	try {
+		await api.update(id, data)
+	} catch (error) {
+		if (previousItems) setItems(previousItems)  // Rollback
+		throw error
+	}
 }
 ```
 
@@ -587,8 +913,10 @@ it('should handle database errors', async () => { ... })
 - [ ] No SQL/command injection
 - [ ] Auth checked before data access
 - [ ] No secrets in code or logs
-- [ ] Ownership verified for resource access
+- [ ] Ownership verified for resource access (in mutation WHERE, not separate SELECT)
 - [ ] User input sanitized
+- [ ] localStorage data validated with schema (Zod)
+- [ ] Color/CSS values use whitelist approach (not regex-only)
 
 **Performance**
 - [ ] No N+1 queries
@@ -596,6 +924,8 @@ it('should handle database errors', async () => { ... })
 - [ ] No blocking operations in async code
 - [ ] Caching has eviction strategy
 - [ ] React components avoid unnecessary re-renders
+- [ ] useEffect intervals have cleanup AND correct dependencies
+- [ ] Context values memoized with useMemo + useCallback for functions
 
 **Correctness**
 - [ ] Null/undefined handled
@@ -603,6 +933,13 @@ it('should handle database errors', async () => { ... })
 - [ ] Async operations properly awaited
 - [ ] Edge cases covered
 - [ ] No off-by-one errors
+- [ ] Database result arrays checked before [0] access
+- [ ] React useEffect has cancellation for async calls
+- [ ] Type assertions don't mask null coalescing
+- [ ] Optimistic updates have rollback on API failure
+- [ ] Next.js: suppressHydrationWarning on theme-controlled elements
+- [ ] Filter-map chains use type guards (not `as` casts)
+- [ ] JSON array fields checked with Array.isArray() (not || fallback)
 
 **Maintainability**
 - [ ] No magic numbers/strings
