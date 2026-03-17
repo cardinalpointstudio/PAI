@@ -1,0 +1,47 @@
+company: COMPANY_NAME
+version: "1.0"
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+
+mission: |
+  DESCRIBE_MISSION_IN_1_2_SENTENCES
+
+customer:
+  primary: PRIMARY_CUSTOMER_DESCRIPTION
+  secondary:
+    - SECONDARY_CUSTOMER_1
+  problem: |
+    PROBLEM_IN_CUSTOMER_WORDS
+
+differentiation:
+  primary: experience  # speed | quality | price | experience | access | trust
+  unfair_advantage: |
+    ONE_SENTENCE_MOAT
+
+metrics:
+  - name: METRIC_NAME
+    description: WHAT_IT_MEASURES
+    type: number  # number | percentage | currency | duration
+    direction: higher_is_better  # higher_is_better | lower_is_better
+    current: null
+    ideal: 100
+    acceptable: 50
+    red_zone: 10
+    unit: "units"
+    frequency: weekly  # daily | weekly | monthly | quarterly
+    source: database  # database | api | manual | analytics
+
+critical_nodes:
+  - node_id: sop-example
+    drives:
+      - METRIC_NAME
+    impact: high  # high | medium | low
+
+constraints:
+  - CONSTRAINT_1
+  - CONSTRAINT_2
+
+data_sources:
+  - name: database
+    type: database  # database | api | manual | analytics
+    refresh: real-time  # real-time | daily | weekly | manual

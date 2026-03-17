@@ -1,0 +1,9 @@
+{
+  "$schema": "./company-graph.schema.json",
+  "company": "COMPANY_NAME",
+  "version": "1.0",
+  "created": "YYYY-MM-DD",
+  "updated": "YYYY-MM-DD",
+  "nodes": [],
+  "edges": []
+}

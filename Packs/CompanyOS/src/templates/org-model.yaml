@@ -1,0 +1,59 @@
+company: COMPANY_NAME
+version: "1.0"
+updated: YYYY-MM-DD
+
+team:
+  - role: founder
+    person: NAME_OR_TBD
+    capacity: full-time  # full-time | part-time | fractional
+    level: 3  # 1 = IC, 2 = lead, 3 = director+
+    reports_to: null
+    owns:
+      - sop-example
+    backup_for: []
+
+constraints:
+  span_of_control:
+    max: 7
+    min: 2
+
+  reporting_rules: []
+    # - role: engineer
+    #   must_report_to: [founder, tech-lead]
+
+  location_rules: []
+    # - role: coach
+    #   requires: on-site  # on-site | remote | flexible
+
+  skill_requirements: []
+    # - role: engineer
+    #   requires: [typescript]
+
+  separation_rules: []
+    # - roles: [developer, reviewer]
+    #   rule: "cannot be same person for same PR"
+
+preferences:
+  - description: "Prefer async communication over meetings"
+    weight: 8
+
+future_roles: []
+  # - trigger: "support_tickets_per_week > 20"
+  #   role: support-lead
+  #   would_own:
+  #     - sop-handle-support
+  #   urgency: not_close  # not_close | approaching | met
+
+non_negotiables:
+  - "Every SOP has exactly one owner"
+  - "No single point of failure for critical SOPs"
+
+compensation:
+  bands:
+    - level: 1
+      range: [50000, 80000]
+    - level: 2
+      range: [75000, 120000]
+    - level: 3
+      range: [100000, 200000]
+  rules: []
